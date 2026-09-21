@@ -36,6 +36,11 @@ Prototypes live in the git-ignored kit_prototypes.local.json. The first run on a
 video (about 16 seconds) and caches them. Color cannot separate players from people at the sideline, so use the
 sideline_suspect flag and, later, the pitch mask. Roles are unverified against labels.
 
+## Events
+python events.py --run data\clipA --montage    # events.csv, review_queue.csv, event_report.json (needs ball_path.csv and tracklet_roles.csv)
+Possession, touches, passes and turnovers in body-height units. Shots are not detected. Every event has a confidence
+and a ball_detected_share, and low-confidence events go to review_queue.csv. Unverified against labels.
+
 ## Pitch
 python pitch_mask.py --run data\clipA         # which tracklets stand on grass (team_classify.py runs this itself)
 python pitch_calibrate.py self-test            # synthetic check of the anchor propagation
