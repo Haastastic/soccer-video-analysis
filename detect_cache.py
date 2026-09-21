@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import BALL, CAM_COLS, COLOR_COLS, PERSON, cut_clip, parse_time
+from sv_common import BALL, CAM_COLS, COLOR_COLS, PERSON, cut_clip, parse_time, require_under_data
 
 
 def region_median_rgb(img, x1, y1, x2, y2):
@@ -83,6 +83,7 @@ def main() -> None:
     ap.add_argument("--max-frames", type=int, default=0, help="stop after N cached frames, for quick tests")
     ap.add_argument("--recut", action="store_true")
     args = ap.parse_args()
+    args.out = require_under_data(args.out)
 
     args.out.mkdir(parents=True, exist_ok=True)
     cache_dir = args.out / "cache"

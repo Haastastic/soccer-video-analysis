@@ -85,5 +85,6 @@ boxes against the real ball. Even BoT-SORT still produced about 790 IDs for abou
 pipeline above replays trackers offline with the camera motion from the cache.
 
 ## Privacy
-data\ and roster.csv are git-ignored. The share-dir copy contains aggregate numbers only.
+Every stage that writes output (`--out`) refuses a path outside this repo's `data\` folder, since its outputs are derived from
+footage of minors. data\ and roster.csv are git-ignored. The share-dir copy contains aggregate numbers only.
 Do not put names, jersey numbers, school or team names in committed files. See CLAUDE.md.
