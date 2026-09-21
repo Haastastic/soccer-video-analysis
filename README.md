@@ -1,42 +1,37 @@
-# Soccer analysis, Phase 1: detection and tracking
+# Soccer analysis: Phase 1b (detection cache, tracker replay, ball linking)
 
-## Setup (Windows PowerShell)
+## Setup (Windows PowerShell), once
 1. python -m venv .venv
 2. .venv\Scripts\Activate.ps1
-3. Install PyTorch with CUDA using the selector at https://pytorch.org
+3. Install PyTorch with CUDA from https://pytorch.org
 4. pip install -r requirements.txt
 5. winget install Gyan.FFmpeg   (then open a new terminal)
-6. python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-   Must print True and your GPU name before you continue.
+6. python -c "import torch; print(torch.cuda.is_available())"   must print True
 
-## Run
-Pick 5 minutes of live play after kickoff, not warmups or halftime.
+## Run everything with one command
+python run_all.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --out data\clipA --share-dir <share-folder>
 
-python phase1_track.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --tracker trackers\bytetrack_long.yaml --out data\run_bytetrack
-python phase1_track.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --out data\run_botsort
+- Detection runs at about 12 fps on the 3060 (yolo11m, 1920 px), so expect roughly 12 minutes for a 5 minute clip. It runs once.
+- Tracker replay and ball linking take a few minutes with the quick grid. They reuse the cache.
+- Rerun with a wider search, no redetection: python run_all.py ... --grid full
+- Rebuild the cache only if you change the model or clip: add --redetect
 
-The second run reuses the same clip only if you point it at the same --out folder,
-so either copy data\run_bytetrack\clip.mp4 across or let it re-cut (about a minute).
+## What you get in data\clipA
+- report.md            everything in one place, the file to read first
+- sweep_results.csv    every tracker configuration and its proxy metrics
+- best_tracklets.csv.gz  tracks from the best config, with kit colors attached
+- ball_path.csv        one ball position per frame where a plausible path exists, marked detected or interpolated
+- cache\               detections.csv.gz, camera.csv, meta.json (input to every later stage)
 
-## Review
-1. Open annotated.mp4 from each run.
-2. Follow 4 players (pick them by jersey number and color) for the full clip.
-3. Log every ID switch (time, old ID, new ID) in id_switches.csv in the run folder.
-4. Compare summary.json across the two runs.
+## Reading the report
+- Camera inliers: the median should be well above 50. If it is low, camera motion is unreliable and BoT-SORT results are not trustworthy.
+- Tracker score = new IDs per minute + 3 x swap suspects per minute. Lower is better. It is a proxy, not ground truth.
+- Ball path is a hypothesis. Verify against a minute of hand-checked frames.
 
-## Exit criteria for Phase 1
-- ID switches counted for 4 tracked players on each tracker.
-- Tracker chosen based on those counts.
-- Ball detection percentage recorded, as the baseline for Phase 4.
-
-## Phase 1 result
-Chosen tracker: BoT-SORT (`trackers\botsort_long.yaml`).
-
-Basis: visual review of both annotated.mp4 files (BoT-SORT tracked players more consistently) plus
-summary.json. Manual ID-switch counts were skipped by decision, so the "4 players per tracker" exit
-criterion was not met as written.
-
-Clip: one JV game video, start 00:14:00, 300 s, yolo11m, imgsz 1920.
+## Phase 1 record (tracker in the loop, superseded by the pipeline above)
+`phase1_track.py` and `phase1_ball_baseline.py` are kept for reference. Clip: one JV game video, start 00:14:00,
+300 s, yolo11m, imgsz 1920. BoT-SORT (`trackers\botsort_long.yaml`) was chosen by visual review plus summary.json.
+Manual ID-switch counts were skipped, so the "4 players per tracker" exit criterion was not met as written.
 
 | Metric | ByteTrack | BoT-SORT |
 |---|---|---|
@@ -45,13 +40,14 @@ Clip: one JV game video, start 00:14:00, 300 s, yolo11m, imgsz 1920.
 | New IDs per minute after 10 s | 417.5 | 159.7 |
 | Ball frames, conf >= 0.1 | 9.2% | 14.9% |
 
-Ball detection baseline for Phase 4, detector only (`phase1_ball_baseline.py`, no tracker):
+Detector-only ball baseline (`phase1_ball_baseline.py`, no tracker), the reference for Phase 4:
 - conf >= 0.1: ball box in 67.7% of frames, longest gap 5.1 s
 - conf >= 0.3: ball box in 34.4% of frames, longest gap 13.0 s
 
-These count a frame as a hit if any ball box is present, so false positives inflate them. Nothing has
-checked the boxes against the real ball. The tracked runs showed only 9.2% (ByteTrack) and 14.9%
-(BoT-SORT) at conf >= 0.1, because the trackers drop most ball boxes.
+These count a frame as a hit if any ball box is present, so false positives inflate them. Nothing has checked the
+boxes against the real ball. Even BoT-SORT still produced about 790 IDs for about 23 people, which is why the
+pipeline above replays trackers offline with the camera motion from the cache.
 
 ## Privacy
-data/ and roster.csv are git-ignored. Crops and annotated video show minors, keep them local.
+data\ and roster.csv are git-ignored. The share-dir copy contains aggregate numbers only.
+Do not put names, jersey numbers, school or team names in committed files. See CLAUDE.md.

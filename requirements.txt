@@ -3,3 +3,5 @@ ultralytics
 opencv-python
 pandas
 numpy
+pyyaml
+tabulate
