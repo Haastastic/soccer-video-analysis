@@ -33,8 +33,17 @@ python team_classify.py calibrate --run data\clipA           # cluster tracklet 
 python team_classify.py assign --run data\clipA --map 1:target,6:opponent,2:official,...
 python team_classify.py classify --run data\clipB --montage   # writes tracklet_roles.csv and team_report.json
 Prototypes live in the git-ignored kit_prototypes.local.json. The first run on a clip measures kit colors from
-video (about 8 minutes) and caches them. Color cannot separate players from people at the sideline, so use the
+video (about 16 seconds) and caches them. Color cannot separate players from people at the sideline, so use the
 sideline_suspect flag and, later, the pitch mask. Roles are unverified against labels.
+
+## Pitch
+python pitch_mask.py --run data\clipA         # which tracklets stand on grass (team_classify.py runs this itself)
+python pitch_calibrate.py self-test            # synthetic check of the anchor propagation
+python pitch_calibrate.py frame --run data\clipA --time 12.5    # gridded still, to read landmark pixels (local only)
+python pitch_calibrate.py apply --run data\clipA --anchors pitch_anchors.local.json   # foot positions in meters
+Metric calibration needs anchors from the owner: 4 or more landmarks per frame, in 3 or more frames, with pitch
+coordinates in meters. The file format is in the pitch_calibrate.py docstring. Without anchors, only the grass
+test runs.
 
 ## Reading the report
 - Camera inliers: the median should be well above 50. If it is low, camera motion is unreliable and BoT-SORT results are not trustworthy.
