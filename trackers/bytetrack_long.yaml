@@ -1,0 +1,9 @@
+# ByteTrack with a longer memory so players who are briefly hidden keep their ID.
+# track_buffer is counted in processed frames, so 60 is about 6 seconds at 10 fps.
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 60
+match_thresh: 0.8
+fuse_score: True
