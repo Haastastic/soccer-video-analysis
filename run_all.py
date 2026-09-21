@@ -32,7 +32,7 @@ def step(title: str, cmd: list) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--video", required=True, type=Path)
-    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--out", required=True, type=require_under_data)
     ap.add_argument("--start", default=None)
     ap.add_argument("--duration", type=float, default=None)
     ap.add_argument("--model", default="yolo11m.pt")
@@ -42,7 +42,6 @@ def main() -> None:
     ap.add_argument("--redetect", action="store_true", help="rebuild the cache even if it exists")
     ap.add_argument("--share-dir", type=Path, default=None)
     args = ap.parse_args()
-    args.out = require_under_data(args.out)
 
     out = args.out.resolve()
     stale_warning = None

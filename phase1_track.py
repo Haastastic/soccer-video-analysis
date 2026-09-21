@@ -110,7 +110,7 @@ def summarize(df: pd.DataFrame, n_frames: int, eff_fps: float, args) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--video", required=True, type=Path, help="full game video file")
-    ap.add_argument("--out", required=True, type=Path, help="output folder for this run")
+    ap.add_argument("--out", required=True, type=require_under_data, help="output folder for this run")
     ap.add_argument("--start", default="00:00:00", help="clip start, HH:MM:SS")
     ap.add_argument("--duration", type=float, default=300, help="clip length in seconds")
     ap.add_argument("--model", default="yolo11m.pt", help="Ultralytics weights, downloaded on first use")
@@ -123,7 +123,6 @@ def main() -> None:
     ap.add_argument("--min-crop-height", type=int, default=60, help="skip crops shorter than this many pixels")
     ap.add_argument("--recut", action="store_true", help="force re-cutting the clip")
     args = ap.parse_args()
-    args.out = require_under_data(args.out)
 
     args.out.mkdir(parents=True, exist_ok=True)
     clip = args.out / "clip.mp4"

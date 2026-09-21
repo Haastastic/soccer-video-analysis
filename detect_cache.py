@@ -71,7 +71,7 @@ def estimate_motion(prev_gray, gray, prev_boxes, scale=0.5):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--video", required=True, type=Path)
-    ap.add_argument("--out", required=True, type=Path, help="run folder, the cache goes in OUT/cache")
+    ap.add_argument("--out", required=True, type=require_under_data, help="run folder, the cache goes in OUT/cache")
     ap.add_argument("--start", default=None, help="clip start HH:MM:SS, omit to use the whole video")
     ap.add_argument("--duration", type=float, default=None, help="clip seconds")
     ap.add_argument("--model", default="yolo11m.pt")
@@ -83,7 +83,6 @@ def main() -> None:
     ap.add_argument("--max-frames", type=int, default=0, help="stop after N cached frames, for quick tests")
     ap.add_argument("--recut", action="store_true")
     args = ap.parse_args()
-    args.out = require_under_data(args.out)
 
     args.out.mkdir(parents=True, exist_ok=True)
     cache_dir = args.out / "cache"

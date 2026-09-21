@@ -12,7 +12,6 @@ Example:
 
 import argparse
 import json
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -110,10 +109,10 @@ def static_clutter_mask(pf, sx, sy, conf, fps, radius, min_s, max_conf, max_gap_
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run", required=True, type=Path)
+    ap.add_argument("--run", required=True, type=require_under_data)
     ap.add_argument(
         "--out",
-        type=Path,
+        type=require_under_data,
         default=None,
         help="write results here instead of the run folder (keep it under data/, the outputs are derived from footage)",
     )
@@ -141,13 +140,9 @@ def main() -> None:
     ap.add_argument("--static-px", type=float, default=15, help="stable-coordinate radius that counts as the same spot")
     ap.add_argument("--static-conf", type=float, default=0.6, help="candidates at or above this conf are never dropped")
     args = ap.parse_args()
-    if getattr(args, "run", None) is not None:
-        args.run = require_under_data(args.run)
 
     cache = Cache(args.run / "cache")
     out_dir = args.out or args.run
-    if args.out is not None:
-        require_under_data(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     idxs, fps = cache.processed_indices(args.fps)
     pf_of = {int(ci): k for k, ci in enumerate(idxs)}
