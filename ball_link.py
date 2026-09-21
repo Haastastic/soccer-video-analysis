@@ -111,6 +111,7 @@ def static_clutter_mask(pf, sx, sy, conf, fps, radius, min_s, max_conf, max_gap_
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=Path)
+    ap.add_argument("--out", type=Path, default=None, help="write results here instead of the run folder")
     ap.add_argument("--fps", type=float, default=10, help="processing rate for linking")
     ap.add_argument("--min-conf", type=float, default=0.05)
     ap.add_argument(
@@ -124,7 +125,12 @@ def main() -> None:
     ap.add_argument("--gap-cost", type=float, default=0.4, help="cost per second of missing frames inside a link")
     ap.add_argument("--restart-cost", type=float, default=1.0)
     ap.add_argument("--max-gap-s", type=float, default=1.5, help="longest gap a link may span")
-    ap.add_argument("--interp-s", type=float, default=1.0, help="interpolate across gaps up to this long")
+    ap.add_argument(
+        "--interp-s",
+        type=float,
+        default=0.5,
+        help="interpolate across gaps up to this long (0.5 tuned on hand labels; 1.0 gave 84%% ghost balls)",
+    )
     ap.add_argument("--min-seg", type=int, default=3, help="drop segments shorter than this unless very confident")
     ap.add_argument("--static-s", type=float, default=3.0, help="drop weak candidates stationary for this long, 0=off")
     ap.add_argument("--static-px", type=float, default=15, help="stable-coordinate radius that counts as the same spot")
@@ -132,6 +138,8 @@ def main() -> None:
     args = ap.parse_args()
 
     cache = Cache(args.run / "cache")
+    out_dir = args.out or args.run
+    out_dir.mkdir(parents=True, exist_ok=True)
     idxs, fps = cache.processed_indices(args.fps)
     pf_of = {int(ci): k for k, ci in enumerate(idxs)}
     b = cache.det[(cache.det.cls == BALL) & (cache.det.conf >= args.min_conf) & cache.det.ci.isin(idxs)].copy()
@@ -168,7 +176,7 @@ def main() -> None:
             "static_candidates_removed": n_static_removed,
             "note": "No ball candidates in the cache at this confidence floor.",
         }
-        (args.run / "ball_link_report.json").write_text(json.dumps(report, indent=2))
+        (out_dir / "ball_link_report.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
         return
     path, is_restart = link(
@@ -224,7 +232,7 @@ def main() -> None:
     ix, iy = cache.to_image(path_df.ci.to_numpy(), path_df.sx.to_numpy(), path_df.sy.to_numpy())
     path_df["x"], path_df["y"] = np.round(ix, 1), np.round(iy, 1)
     path_df["time_s"] = np.round(path_df.ci.to_numpy() / cache.fps, 3)
-    path_df.drop(columns=["sx", "sy"]).to_csv(args.run / "ball_path.csv", index=False)
+    path_df.drop(columns=["sx", "sy"]).to_csv(out_dir / "ball_path.csv", index=False)
 
     have = np.zeros(n_proc, dtype=bool)
     have[path_df.pf.to_numpy()] = True
@@ -263,7 +271,7 @@ def main() -> None:
         "vmax_px_s": vmax,
         "note": "Hypothesis only. Verify against hand-labeled frames.",
     }
-    (args.run / "ball_link_report.json").write_text(json.dumps(report, indent=2))
+    (out_dir / "ball_link_report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
 

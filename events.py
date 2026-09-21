@@ -39,6 +39,7 @@ MIN_POSSESSION_S = 0.4
 BRIDGE_S = 0.4  # gaps up to this long inside one player's possession are bridged
 MAX_PASS_GAP_S = 3.0
 MIN_PASS_H = 1.5  # players closer than this at the handoff are treated as one player
+ALLOW_INTERPOLATED = False  # interpolated ball positions were 63% correct and often a ghost, see CLAUDE.md
 
 
 def load_inputs(run: Path):
@@ -89,7 +90,7 @@ def segment_velocity(sx, sy, seg, t):
     return vx, vy
 
 
-def detect(run: Path, min_confidence: float):
+def detect(run: Path, min_confidence: float, allow_interpolated: bool = ALLOW_INTERPOLATED):
     cache, ball, tr, roles = load_inputs(run)
     fps = cache.fps / max(1, int(np.median(np.diff(ball.ci)))) if len(ball) > 1 else 10.0
     ci = ball.ci.to_numpy()
@@ -106,7 +107,8 @@ def detect(run: Path, min_confidence: float):
     dist = np.where(np.isfinite(dist), dist, np.inf)
     nearest = dist.argmin(axis=1) if dist.shape[1] else np.zeros(n, dtype=int)
     dmin = dist.min(axis=1) if dist.shape[1] else np.full(n, np.inf)
-    in_contact = dmin <= CONTACT_H
+    trusted = np.ones(n, dtype=bool) if allow_interpolated else detected
+    in_contact = (dmin <= CONTACT_H) & trusted  # contact needs a detected ball unless told otherwise
 
     # Ball velocity in stable coordinates (px/s), expressed in body heights per second of the nearest player.
     sx, sy = cache.to_stable(ci, bx, by)
@@ -176,7 +178,7 @@ def detect(run: Path, min_confidence: float):
     even = np.r_[False, (ci[1:-1] - ci[:-2] == step) & (ci[2:] - ci[1:-1] == step), False]
     ok_seg = ok_seg & even
     dv_h = np.hypot(dvx, dvy) * scale / h_ref / 2  # body heights per second, over the 2-frame window
-    cand = np.flatnonzero(ok_seg & np.isfinite(dv_h) & (dv_h >= TOUCH_DV_H) & (dmin <= TOUCH_H))
+    cand = np.flatnonzero(ok_seg & trusted & np.isfinite(dv_h) & (dv_h >= TOUCH_DV_H) & (dmin <= TOUCH_H))
     last = -(10**9)
     for i in cand:
         window = np.arange(max(0, i - 2), min(n, i + 3))
@@ -303,9 +305,10 @@ def main() -> None:
     ap.add_argument("--run", required=True, type=Path)
     ap.add_argument("--min-confidence", type=float, default=0.5, help="events below this go to the review queue")
     ap.add_argument("--montage", action="store_true", help="write events_montage.png, local review only")
+    ap.add_argument("--allow-interpolated", action="store_true", help="count interpolated ball positions as contact")
     args = ap.parse_args()
 
-    ev, info, cache = detect(args.run, args.min_confidence)
+    ev, info, cache = detect(args.run, args.min_confidence, args.allow_interpolated)
     if ev.empty:
         raise SystemExit("No events found.")
     ev.to_csv(args.run / "events.csv", index=False)

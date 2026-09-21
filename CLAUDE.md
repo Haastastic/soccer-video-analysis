@@ -38,7 +38,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Caution: the proxy score rewards leniency. A match threshold of 0.95 accepts boxes with IoU as low as 0.05, and the swap-suspect count only sees large jumps, not swaps between adjacent players. Verify on labeled data before trusting it. Still about 13 IDs per player, so tracklet stitching is required.
 - ByteTrack is 3 to 5 times worse (1719+ IDs) and takes about 7 min per config at 30 fps. It is now opt-in (--trackers bytetrack,botsort).
 - Ball linking without a clutter filter locked onto static white objects (a sideline marker, an item on a cart) and stationary spare balls: 4 of 8 sampled path points were wrong. ball_link.py now drops weak candidates (conf below 0.6) that sit at the same stable spot for one continuous stretch of 3 s or more (gaps up to 1 s allowed, separate revisits are not added together). Every one of 12 sampled removals from the first version was clutter or a spare ball. With the final version, 10 of 12 sampled detected points were the game ball; the misses were the weak white marker (conf 0.12) and an edge-of-frame blur (conf 0.05). Interpolated points are weaker (1 of 4 correct in the earlier sample). Sample sizes are tiny.
-- Ball path coverage after filtering: A 52% detected (81% with interpolation, longest gap 5.1 s), B 63% detected (97% with interpolation, longest gap 1.3 s). UNVERIFIED against hand-labeled frames. Needs about 60 s of hand-checked ball positions.
+- Ball path coverage (interpolation limited to 0.5 s, see below): A 52% detected (68% with interpolation, longest gap 5.1 s), B 63% detected (87% with interpolation, longest gap 1.3 s).
+- HAND-CHECKED on clip A, 150 to 210 s, 119 frames (owner labeled with ball_label.py; small, one action-heavy window, and accepting a shown prediction may anchor the labeler): with the old 1.0 s interpolation the path was correct on 88% of visible-ball frames, but claimed a ball on 84% of frames where none was visible. Detected positions were 97% correct (76 of 78), interpolated only 63%. Tuned on 150 to 180 s and checked on 180 to 210 s, interpolation up to 0.5 s is the best trade: 85% correct when visible, 53% ghost balls when hidden, precision 84%, and it won on both halves. No interpolation at all gave 76% / 21% / 93%. Ghosts cannot be removed by tuning, since a hidden ball and an undetected ball look the same inside a gap, so events.py now ignores interpolated positions for contact.
 - scan_density.py must require zoomed-in play: the first pick was a pre-game stretch (static wide shot, cones, huddles) that looked crowded by overlap alone.
 
 ## Phase 2 findings: team classification (team_classify.py)
@@ -59,6 +60,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Shared frame reader: sv_common.read_frames decodes sequentially, about 30 times faster than seeking.
 
 ## Phase 4 findings: events (events.py)
+- Contact and touches use detected ball positions only (`--allow-interpolated` restores the old behavior), because interpolated ones were often ghosts. This cut clip A from 60 touches, 57 possessions, 9 passes, 17 turnovers to 48, 45, 6, 9 (the counts below are from before this change).
 - Detects possession segments, touches, passes and turnovers from ball_path.csv, best_tracklets.csv.gz and tracklet_roles.csv. Distances are in body heights, so it needs no pitch calibration. Shots are NOT detected (they need the goal position, so they wait for calibration).
 - Every event has a confidence and ball_detected_share. Events under 0.5 go to review_queue.csv. Thresholds (contact 0.6 body heights, touch velocity change 2 body heights per second, possession 0.4 s, pass gap 3 s, same-player merge under 1.5 body heights) are hand-set guesses, not tuned.
 - Clip A: 60 touches, 57 possessions, 9 passes, 17 turnovers in 4 min; possession time 42 s target, 25 s opponent; median possession 0.7 s; ball in contact for 33% of frames. Clip B: 138 touches, 103 possessions, 19 passes, 32 turnovers, median confidence 0.48, over half in the review queue.
@@ -69,7 +71,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
-3. Ball linking: ball_link.py (done with clutter filter, ball path unverified)
+3. Ball linking: ball_link.py (done; hand-checked on one 60 s window, 97% correct when detected, interpolation weak)
 4. Team classification: team_classify.py (done, unverified, goalkeeper weak)
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (tool done, self-tested, BLOCKED on owner anchors for metric coordinates)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
@@ -86,7 +88,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
-1. (Needs the owner) Hand-check about 60 s of ball positions: run `python ball_label.py label --run data\clipA` in a normal terminal (a window opens, about 10 minutes), then `python ball_label.py score --run data\clipA`. Until then treat the ball path as unverified.
+1. (Optional, owner) Hand-check a second ball window from another part of the game or from clip B (`python ball_label.py label --run data\clipB --start 100 --duration 60`, then `score`), since the tuning used a single window.
 2. (Needs the owner) Label roles for about 40 tracklets to score team_classify.py. Until then treat roles as unverified.
 3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
 4. (Needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
