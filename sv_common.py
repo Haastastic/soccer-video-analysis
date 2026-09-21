@@ -9,12 +9,14 @@ Frames are addressed by "ci", the position in the cache (0, 1, 2, ...). Replays 
 frame rate simply take every m-th cached frame and compose the camera motion in between.
 """
 
+import hashlib
 import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 
@@ -54,6 +56,62 @@ def cut_clip(video: Path, start: float, duration: float, dest: Path) -> None:
     ]
     print("Cutting clip:", " ".join(cmd))
     subprocess.run(cmd, check=True)
+
+
+def read_frames(video: Path, frame_numbers):
+    """Yield (frame_number, image) for the requested clip frames in ascending order.
+
+    Decodes the clip once from the start and skips with grab(), which is far faster than seeking to each frame
+    (a few thousand random seeks on 1080p H.264 took about 8 minutes, one sequential pass about a minute).
+    """
+    wanted = sorted({int(f) for f in frame_numbers})
+    cap = cv2.VideoCapture(str(video))
+    pos = 0
+    for f in wanted:
+        while pos < f:
+            if not cap.grab():
+                return
+            pos += 1
+        ok, img = cap.read()
+        pos += 1
+        if not ok:
+            return
+        yield f, img
+    cap.release()
+
+
+def cache_stride(run: Path) -> int:
+    """Video frames per cached frame. ci counts cached frames, so the clip frame is ci * stride."""
+    return int(json.loads((run / "cache" / "meta.json").read_text()).get("stride", 1))
+
+
+def sample_rows(tr: pd.DataFrame, n: int = 8, min_h: float = 24) -> pd.DataFrame:
+    """Up to n evenly spaced rows per tracklet, skipping boxes too small to measure."""
+    parts = []
+    for _, d in tr[(tr.y2 - tr.y1) >= min_h].groupby("track_id"):
+        parts.append(d.iloc[np.linspace(0, len(d) - 1, min(n, len(d))).round().astype(int)])
+    return pd.concat(parts) if parts else tr.iloc[:0]
+
+
+def tracklet_fingerprint(tr: pd.DataFrame, salt: str = "") -> str:
+    """Identifies this exact set of tracklets, so cached per-tracklet results are never joined onto regenerated IDs."""
+    cols = tr[["track_id", "ci", "x1", "y1", "x2", "y2"]].to_numpy()
+    return hashlib.sha1(cols.tobytes() + salt.encode()).hexdigest()
+
+
+def cached_per_tracklet(run: Path, name: str, tr: pd.DataFrame, salt: str, compute):
+    """Return compute() as a DataFrame indexed by track_id, cached as run/name.csv and tied to the tracklets."""
+    dest, stamp = run / f"{name}.csv", run / f"{name}.sha1"
+    fingerprint = tracklet_fingerprint(tr, salt)
+    if dest.exists() and stamp.exists() and stamp.read_text().strip() == fingerprint:
+        return pd.read_csv(dest, index_col="track_id")
+    if dest.exists():
+        print(f"Tracklets changed since {name} was measured, re-measuring.")
+    df = compute()
+    df.index.name = "track_id"
+    df.to_csv(dest)
+    stamp.write_text(fingerprint)
+    return df
 
 
 # ---------------------------------------------------------------- cache IO

@@ -6,7 +6,8 @@ review montage in `calibrate`. Roles come from numeric color prototypes stored i
 lighting differences between clips are absorbed, and reports how far each center moved.
 
 Color alone cannot tell players from people at the sideline (bench, coaches) who wear the same kit, so
-each tracklet also gets motion features and a sideline_suspect flag. Pitch calibration decides that later.
+each tracklet also gets motion features, a sideline_suspect flag and pitch_mask.py's on-pitch test, which
+combine into player_candidate.
 
 Workflow:
   python team_classify.py calibrate --run data\\clipA               # clusters + review montage (local only)
@@ -15,7 +16,6 @@ Workflow:
 """
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -23,7 +23,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache
+from pitch_mask import on_pitch_table
+from sv_common import Cache, cache_stride, cached_per_tracklet, read_frames, sample_rows
 
 ROLES = ["target", "opponent", "official", "goalkeeper", "other"]
 COLOR_COLS = ["torso_r", "torso_g", "torso_b", "legs_r", "legs_g", "legs_b"]
@@ -105,42 +106,23 @@ def patch_lab(img, x1, y1, x2, y2):
     return np.median(lab, axis=0)
 
 
-def cache_stride(run: Path) -> int:
-    """Video frames per cached frame. ci counts cached frames, so the clip frame is ci * stride."""
-    return int(json.loads((run / "cache" / "meta.json").read_text()).get("stride", 1))
-
-
-def tracklet_fingerprint(tr: pd.DataFrame) -> str:
-    """Identifies this exact set of tracklets, so cached colors are never joined onto regenerated track IDs."""
-    cols = tr[["track_id", "ci", "x1", "y1", "x2", "y2"]].to_numpy()
-    return hashlib.sha1(cols.tobytes() + f"{DESCRIPTOR}:{SAMPLES}".encode()).hexdigest()
-
-
 def pixel_colors(run: Path, tr: pd.DataFrame) -> pd.DataFrame:
     """Re-measure kit colors from SAMPLES frames per tracklet. Cached in tracklet_colors.csv."""
-    dest, stamp = run / "tracklet_colors.csv", run / "tracklet_colors.sha1"
-    fingerprint = tracklet_fingerprint(tr)
-    if dest.exists() and stamp.exists() and stamp.read_text().strip() == fingerprint:
-        return pd.read_csv(dest, index_col="track_id")
-    if dest.exists():
-        print("Tracklets changed since the colors were measured, re-measuring.")
+    return cached_per_tracklet(run, "tracklet_colors", tr, f"{DESCRIPTOR}:{SAMPLES}", lambda: _measure_colors(run, tr))
+
+
+def _measure_colors(run: Path, tr: pd.DataFrame) -> pd.DataFrame:
     stride = cache_stride(run)
-    cap = cv2.VideoCapture(str(run / "clip.mp4"))
-    out = {}
-    for tid, d in tr.groupby("track_id"):
-        d = d[(d.y2 - d.y1) >= 24]
-        if len(d) == 0:
-            continue
-        rows = d.iloc[np.linspace(0, len(d) - 1, min(SAMPLES, len(d))).round().astype(int)]
-        vals = []
-        for r in rows.itertuples():
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(r.ci) * stride)
-            ok, img = cap.read()
-            if not ok:
-                continue
+    samples = sample_rows(tr, SAMPLES)
+    by_frame = {}
+    for r in samples.itertuples():
+        by_frame.setdefault(int(r.ci), []).append(r)
+    vals = {}
+    for ci_frame, img in read_frames(run / "clip.mp4", [ci * stride for ci in by_frame]):
+        for r in by_frame[ci_frame // stride]:
             w, h = r.x2 - r.x1, r.y2 - r.y1
             tx1, tx2 = r.x1 + 0.25 * w, r.x2 - 0.25 * w
-            vals.append(
+            vals.setdefault(r.track_id, []).append(
                 np.concatenate(
                     [
                         patch_lab(img, tx1, r.y1 + 0.20 * h, tx2, r.y1 + 0.50 * h),
@@ -148,13 +130,11 @@ def pixel_colors(run: Path, tr: pd.DataFrame) -> pd.DataFrame:
                     ]
                 )
             )
-        if vals:
-            out[tid] = np.nanmedian(np.array(vals), axis=0) if np.isfinite(vals).any() else np.full(6, np.nan)
-    df = pd.DataFrame.from_dict(out, orient="index", columns=LAB_COLS)
-    df.index.name = "track_id"
-    df.to_csv(dest)
-    stamp.write_text(fingerprint)
-    return df
+    out = {
+        tid: np.nanmedian(np.array(v), axis=0) if np.isfinite(v).any() else np.full(6, np.nan)
+        for tid, v in vals.items()
+    }
+    return pd.DataFrame.from_dict(out, orient="index", columns=LAB_COLS)
 
 
 def cmd_calibrate(args) -> None:
@@ -292,17 +272,23 @@ def cmd_classify(args) -> None:
         ]
     )
     res.index.name = "track_id"
+    res = res.join(on_pitch_table(run)[["foot_grass", "on_pitch"]])
+    res["on_pitch"] = res.on_pitch.fillna(False).astype(bool)
+    # A player candidate stands on grass and does not sit still for 8 s or more. Sideline people fail one or both.
+    res["player_candidate"] = res.on_pitch & ~res.sideline_suspect.astype(bool)
     res.sort_index().to_csv(run / "tracklet_roles.csv")
 
     tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["pf", "track_id"])
-    tr = tr.join(res[["role", "sideline_suspect"]], on="track_id")
-    moving = tr[~tr.sideline_suspect.astype(bool)]
+    tr = tr.join(res[["role", "player_candidate"]], on="track_id")
+    moving = tr[tr.player_candidate]
     per_frame = moving.assign(n=1).pivot_table(index="pf", columns="role", values="n", aggfunc="sum", fill_value=0)
     report = {
         "tracklets": int(len(res)),
         "rows_share_by_role_pct": (100 * tr.role.value_counts(normalize=True)).round(1).to_dict(),
         "tracklets_by_role": res.role.value_counts().to_dict(),
-        "median_per_frame_excluding_sideline_suspects": per_frame.median().round(1).to_dict(),
+        "player_candidates_by_role": res[res.player_candidate].role.value_counts().to_dict(),
+        "median_per_frame_player_candidates": per_frame.median().round(1).to_dict(),
+        "off_pitch_pct": round(100 * float((~res.on_pitch).mean()), 1),
         "median_confidence": float(res.confidence[res.role != "unknown"].median()),
         "low_confidence_pct": round(100 * float((res.confidence[res.role != "unknown"] < 0.3).mean()), 1),
         "sideline_suspect_pct_by_role": (100 * res.groupby("role").sideline_suspect.mean()).round(0).to_dict(),
@@ -312,7 +298,12 @@ def cmd_classify(args) -> None:
     }
     (run / "team_report.json").write_text(json.dumps(report, indent=2))
     if args.montage:
-        groups = {r: res.index[(res.role == r) & (res.n_rows >= MIN_ROWS)].to_numpy() for r in [*ROLES, "unknown"]}
+        ok = res.n_rows >= MIN_ROWS
+        groups = {
+            f"{r}{'' if c else ' EXCLUDED'}": res.index[(res.role == r) & ok & (res.player_candidate == c)].to_numpy()
+            for r in [*ROLES, "unknown"]
+            for c in (True, False)
+        }
         write_montage(run, {k: v for k, v in groups.items() if len(v)}, run / "roles_montage.png")
     print(json.dumps(report, indent=2))
 
