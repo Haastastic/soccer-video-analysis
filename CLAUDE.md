@@ -43,19 +43,27 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 
 ## Phase 2 findings: team classification (team_classify.py)
 - Roles: target, opponent, official, goalkeeper, other, plus unknown for short or unmeasurable tracklets. Role prototypes are numeric Lab centers in kit_prototypes.local.json (git-ignored, made by calibrate + assign on a reference clip). Kit colors never go in committed files.
-- The cached patch medians were too contaminated by grass and skin on small players. classify re-measures colors from 8 frames per tracklet using non-grass pixels (about 8 min per clip because of video seeking, cached in tracklet_colors.csv, and re-measured automatically if the tracklets change). Clip frames are ci times the cache stride. This made the clusters clean where the cached colors gave mixed clusters.
+- The cached patch medians were too contaminated by grass and skin on small players. classify re-measures colors from 8 frames per tracklet using non-grass pixels (about 16 s per clip with a sequential decoder; it was 8 min with per-frame seeking; cached in tracklet_colors.csv and re-measured automatically if the tracklets change). Clip frames are ci times the cache stride. This made the clusters clean where the cached colors gave mixed clusters.
 - Color cannot separate players from people at the sideline (bench, coaches, vests) who wear the same kit. Each tracklet gets extent_h (path spread in body heights) and a sideline_suspect flag (8 s or more and extent under 0.75). Phase 3's pitch mask should decide on-pitch.
 - Clip A (the calibration clip): median on-pitch counts per frame 7 target, 7 opponent, 1 goalkeeper, 1 official. This is circular because the prototypes came from this clip.
 - Clip B (held-out, wider framing), sampled 8 tracklets per role by eye: opponent 7 of 8, official 3 of 3, other 8 of 8 non-players, target 5 of 8 (errors were sideline people and an official), goalkeeper 1 of 3 (two striped officials leaked in). Median confidence only 0.21 there, so most labels are low confidence. UNVERIFIED against labels, and samples are tiny.
 - `classify --refine` (adapts prototypes to the clip) leaked target players into other and opponents into official in a first test, so it is opt-in and not recommended.
 - Goalkeepers are one tracklet each per team and share color with officials in the hi-vis range. Treat the goalkeeper role as weak until identity (step 7) or labels exist.
 
+## Phase 3 findings: pitch mask and calibration (pitch_mask.py, pitch_calibrate.py)
+- pitch_mask.py measures the grass fraction in a window at each tracklet's feet (8 sampled frames, median). Combined with sideline_suspect it gives player_candidate in tracklet_roles.csv. team_classify.py now uses it.
+- Clip A: only 3% of tracklets are off the pitch, because its bench sits on grass, so the motion flag (sitting still 8 s or more) does most of the work there. Clip B: 22% are off the pitch (track, stands).
+- Sampled on clip B: candidates were 8 of 8 target and 7 of 8 opponent real players. Excluded tracklets were mostly non-players (bench, spectators, coaches), but roughly a third of excluded target and opponent tracklets looked like real players (near the touchline or briefly static), so recall drops. min-grass and the static rule are the knobs.
+- Goalkeeper is unreliable on clip B: striped officials and the tan-kit goalkeeper land in the wrong classes. Not fixed.
+- pitch_calibrate.py is anchor based: the owner reads pixel positions of known landmarks in a few frames (`pitch_calibrate.py frame` writes a gridded still) and gives pitch coordinates in meters, so no pitch size is assumed. Each anchor's homography is carried to other frames by the cached camera motion (modeled as a similarity, so error grows with the time from an anchor; `apply` reports the cross-anchor error in meters). Exact to 1 mm on synthetic similarity motion (`self-test`). NOT run on real footage, because there are no anchors yet.
+- Shared frame reader: sv_common.read_frames decodes sequentially, about 30 times faster than seeking.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
 3. Ball linking: ball_link.py (done with clutter filter, ball path unverified)
-4. Team classification: team_classify.py (done, unverified, goalkeeper weak, needs pitch mask to drop sideline people)
-5. Pitch calibration from visible lines: NOT STARTED (next)
+4. Team classification: team_classify.py (done, unverified, goalkeeper weak)
+5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (tool done, self-tested, BLOCKED on owner anchors for metric coordinates)
 6. Event detection (possession, touch, pass, shot): NOT STARTED
 7. Identity assignment with roster, tracklet stitching, review UI: NOT STARTED
 8. Stats database and coaching tips: NOT STARTED
@@ -71,4 +79,5 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 ## Next actions
 1. (Needs the owner) Hand-check about 60 s of ball positions to score ball_path.csv. Until then treat the ball path as unverified.
 2. (Needs the owner) Label roles for about 40 tracklets to score team_classify.py. Until then treat roles as unverified.
-3. Start pitch calibration using the per-frame camera motion as the between-anchor transform.
+3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
+4. Step 6, event detection (possession, touch, pass), on stable coordinates with distances in body heights. Shots need the goal position, so they wait for calibration.
