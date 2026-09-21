@@ -75,6 +75,20 @@ def player_positions(tr: pd.DataFrame, ci: np.ndarray, max_gap_frames: int = 30)
     return ids, foot_x, foot_y, np.maximum(height, 1.0)
 
 
+def segment_velocity(sx, sy, seg, t):
+    """Ball velocity (px/s) from each path segment on its own, NaN for segments with a single point.
+
+    A global gradient would mix positions across a segment break (a jump between two unrelated pieces of the
+    path) into the frames next to it. The time axis is used, so holes inside a segment are handled.
+    """
+    vx, vy = np.full(len(sx), np.nan), np.full(len(sx), np.nan)
+    for sid in np.unique(seg):
+        m = np.flatnonzero(seg == sid)
+        if len(m) >= 2:
+            vx[m], vy[m] = np.gradient(sx[m], t[m]), np.gradient(sy[m], t[m])
+    return vx, vy
+
+
 def detect(run: Path, min_confidence: float):
     cache, ball, tr, roles = load_inputs(run)
     fps = cache.fps / max(1, int(np.median(np.diff(ball.ci)))) if len(ball) > 1 else 10.0
@@ -97,7 +111,7 @@ def detect(run: Path, min_confidence: float):
     # Ball velocity in stable coordinates (px/s), expressed in body heights per second of the nearest player.
     sx, sy = cache.to_stable(ci, bx, by)
     same_seg = np.r_[False, seg[1:] == seg[:-1]]
-    vx, vy = np.gradient(sx) * fps, np.gradient(sy) * fps
+    vx, vy = segment_velocity(sx, sy, seg, ci / cache.fps)
     scale = np.sqrt(np.abs(np.linalg.det(cache.cum[ci][:, :2, :2])))
     h_near = h[np.arange(n), nearest] if dist.shape[1] else np.full(n, 70.0)
     h_ref = np.where(np.isfinite(h_near), h_near, np.nanmedian(h) if np.isfinite(h).any() else 70.0)
@@ -153,11 +167,11 @@ def detect(run: Path, min_confidence: float):
         )
 
     # ---- touches: sharp velocity change with a player close
-    dvx, dvy = np.zeros(n), np.zeros(n)
+    dvx, dvy = np.full(n, np.nan), np.full(n, np.nan)
     dvx[1:-1], dvy[1:-1] = vx[2:] - vx[:-2], vy[2:] - vy[:-2]
-    ok_seg = same_seg & np.r_[same_seg[1:], False]
+    ok_seg = same_seg & np.r_[same_seg[1:], False]  # frames i-1, i, i+1 share a segment
     dv_h = np.hypot(dvx, dvy) * scale / h_ref / 2  # body heights per second, over the 2-frame window
-    cand = np.flatnonzero(ok_seg & (dv_h >= TOUCH_DV_H) & (dmin <= TOUCH_H))
+    cand = np.flatnonzero(ok_seg & np.isfinite(dv_h) & (dv_h >= TOUCH_DV_H) & (dmin <= TOUCH_H))
     last = -(10**9)
     for i in cand:
         window = np.arange(max(0, i - 2), min(n, i + 3))
@@ -223,7 +237,7 @@ def detect(run: Path, min_confidence: float):
         )
 
     ev = pd.DataFrame(events).sort_values(["time_s", "type"]).reset_index(drop=True) if events else pd.DataFrame()
-    speed_h = np.where(ok_seg, np.hypot(vx, vy) * scale / h_ref, np.nan)  # not across path segment breaks
+    speed_h = np.hypot(vx, vy) * scale / h_ref  # per segment, so never across a path segment break
     return (
         ev,
         dict(fps=fps, n_frames=n, detected=detected, in_contact=in_contact, speed_h=speed_h, ids=ids, ball=ball),
