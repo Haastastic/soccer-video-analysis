@@ -5,3 +5,6 @@ roster.csv
 .venv/
 __pycache__/
 .ruff_cache/
+LOCAL_CONTEXT.md
+CLAUDE.local.md
+share/
