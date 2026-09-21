@@ -71,27 +71,40 @@ def link(pf, x, y, conf, fps, vmax, reward_base, w_move, gap_cost, restart_cost,
     return np.array(path), is_restart
 
 
-def static_clutter_mask(pf, sx, sy, conf, fps, radius, min_s, max_conf):
-    """True for low-confidence candidates that sit at the same stable spot in at least min_s of frames.
+def static_clutter_mask(pf, sx, sy, conf, fps, radius, min_s, max_conf, max_gap_s=1.0):
+    """True for low-confidence candidates that sit at the same stable spot for one continuous stretch of min_s.
 
     Static white objects (sideline markers, bags on carts) look like a ball and would otherwise win the
-    linking because a stationary candidate is trivially plausible. Confident candidates are kept, so a ball
-    at rest for a kickoff or goal kick survives.
+    linking because a stationary candidate is trivially plausible. A stretch is the frames with a candidate in
+    the 3x3 cell neighborhood, joined across gaps up to max_gap_s (weak detections flicker), and it must span
+    at least min_s. Separate visits to the same spot (kickoff mark, penalty spot) are not added together.
+    Confident candidates are kept, so a ball at rest for a kickoff or goal kick survives.
     """
     cells = [tuple(c) for c in np.floor(np.stack([sx, sy], axis=1) / radius).astype(int)]
     frames_in_cell = {}
     for cell, f in zip(cells, pf, strict=True):
         frames_in_cell.setdefault(cell, set()).add(int(f))
     need = max(2, int(round(min_s * fps)))
+    max_gap = max(1, int(round(max_gap_s * fps)))
+    stretches = {}  # cell -> (sorted frames, stretch start frame per frame, stretch end frame per frame)
     mask = np.zeros(len(pf), dtype=bool)
     for i, (cx, cy) in enumerate(cells):
         if conf[i] >= max_conf:
             continue
-        frames = set()
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                frames |= frames_in_cell.get((cx + dx, cy + dy), set())
-        mask[i] = len(frames) >= need
+        if (cx, cy) not in stretches:
+            frames = set()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    frames |= frames_in_cell.get((cx + dx, cy + dy), set())
+            fr = np.array(sorted(frames))
+            new_stretch = np.concatenate([[True], np.diff(fr) > max_gap])
+            first = fr[np.flatnonzero(new_stretch)][np.cumsum(new_stretch) - 1]
+            last_idx = np.flatnonzero(np.concatenate([new_stretch[1:], [True]]))
+            last = fr[last_idx][np.cumsum(new_stretch) - 1]
+            stretches[(cx, cy)] = (fr, first, last)
+        fr, first, last = stretches[(cx, cy)]
+        k = int(np.searchsorted(fr, int(pf[i])))
+        mask[i] = (last[k] - first[k] + 1) >= need
     return mask
 
 

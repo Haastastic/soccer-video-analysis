@@ -31,7 +31,7 @@ Samples the whole game and proposes the most crowded 5 minutes of zoomed-in live
 ## Reading the report
 - Camera inliers: the median should be well above 50. If it is low, camera motion is unreliable and BoT-SORT results are not trustworthy.
 - Tracker score = new IDs per minute + 3 x swap suspects per minute. Lower is better. It is a proxy, not ground truth.
-- Ball path is a hypothesis. Weak candidates that stay at one spot for 3 s or more are dropped as clutter (markers, spare balls). Verify against a minute of hand-checked frames.
+- Ball path is a hypothesis. Weak candidates that stay at one spot for a continuous 3 s or more are dropped as clutter (markers, spare balls). Isolated weak hits on a marker can still leak through. Verify against a minute of hand-checked frames.
 - The best tracker config often sits at the edge of the grid. If it does, widen the grid before trusting it.
 
 ## Phase 1 record (tracker in the loop, superseded by the pipeline above)
