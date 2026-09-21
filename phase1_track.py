@@ -169,7 +169,7 @@ def main() -> None:
     )
 
     rows = []
-    n = 0
+    n = -1
     for n, r in enumerate(results):
         frame_idx = n * stride
         boxes = r.boxes
