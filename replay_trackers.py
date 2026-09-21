@@ -6,7 +6,8 @@ swap suspects are better, and the swap column keeps a tracker from winning by me
 
 Example:
   python replay_trackers.py --run data\\clipA
-  python replay_trackers.py --run data\\clipA --grid full --fps-list 10,15,30
+  python replay_trackers.py --run data\\clipA --grid wide
+  python replay_trackers.py --run data\\clipA --grid full --fps-list 10,15,30 --trackers bytetrack,botsort
 """
 
 import argparse
@@ -125,6 +126,13 @@ def make_grid(kind: str):
         for hi, buf, mt in itertools.product([0.25, 0.4, 0.5], [3.0, 6.0, 12.0], [0.7, 0.8, 0.9]):
             grid.append(dict(track_high_thresh=hi, new_track_thresh=hi, buffer_s=buf, match_thresh=mt))
         return grid
+    if kind == "wide":
+        # Wider than "full": on real footage the best configs sat at the edge of the quick and full grids.
+        # The baseline goes first so the "Phase 1 equivalent" row is still reported.
+        grid = [base]
+        for hi, buf, mt in itertools.product([0.5, 0.6, 0.7], [12.0, 20.0, 30.0], [0.9, 0.95]):
+            grid.append(dict(track_high_thresh=hi, new_track_thresh=hi, buffer_s=buf, match_thresh=mt))
+        return grid
     return [
         base,
         dict(base, track_high_thresh=0.5, new_track_thresh=0.5),
@@ -137,9 +145,13 @@ def make_grid(kind: str):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=Path, help="run folder that contains cache/")
-    ap.add_argument("--grid", choices=["quick", "full"], default="quick")
-    ap.add_argument("--fps-list", default="10,15,30", help="replay rates, limited to what the cache supports")
-    ap.add_argument("--trackers", default="bytetrack,botsort")
+    ap.add_argument("--grid", choices=["quick", "full", "wide"], default="quick")
+    ap.add_argument("--fps-list", default="10,15", help="replay rates, limited to what the cache supports")
+    ap.add_argument(
+        "--trackers",
+        default="botsort",
+        help="comma list. ByteTrack is opt-in: it gave 3 to 5 times more IDs and was far slower at 30 fps",
+    )
     ap.add_argument("--person-floor", type=float, default=0.1, help="drop person detections below this before tracking")
     ap.add_argument("--expected-players", type=int, default=23)
     args = ap.parse_args()

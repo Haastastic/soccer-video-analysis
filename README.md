@@ -9,11 +9,12 @@
 6. python -c "import torch; print(torch.cuda.is_available())"   must print True
 
 ## Run everything with one command
-python run_all.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --out data\clipA --share-dir <share-folder>
+python run_all.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --out data\clipA --grid wide --share-dir <share-folder>
 
 - Detection runs at about 12 fps on the 3060 (yolo11m, 1920 px), so expect roughly 12 minutes for a 5 minute clip. It runs once.
-- Tracker replay and ball linking take a few minutes with the quick grid. They reuse the cache.
-- Rerun with a wider search, no redetection: python run_all.py ... --grid full
+- Tracker replay and ball linking reuse the cache and take about 8 minutes with `--grid wide` (BoT-SORT only, 10 and 15 fps). `--grid quick` is 5 configs and takes a couple of minutes.
+- ByteTrack is opt-in (`--trackers bytetrack,botsort`). It is far worse and takes minutes per config at 30 fps.
+- Rerun a different search without redetecting: python run_all.py ... --grid wide
 - Rebuild the cache only if you change the model or clip: add --redetect
 
 ## What you get in data\clipA
@@ -23,10 +24,15 @@ python run_all.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --ou
 - ball_path.csv        one ball position per frame where a plausible path exists, marked detected or interpolated
 - cache\               detections.csv.gz, camera.csv, meta.json (input to every later stage)
 
+## Picking a validation clip
+python scan_density.py --video D:\games\game.mp4 --out data --exclude 00:14:00-00:19:00
+Samples the whole game and proposes the most crowded 5 minutes of zoomed-in live play. Add `--reuse` to re-pick from the saved scan.
+
 ## Reading the report
 - Camera inliers: the median should be well above 50. If it is low, camera motion is unreliable and BoT-SORT results are not trustworthy.
 - Tracker score = new IDs per minute + 3 x swap suspects per minute. Lower is better. It is a proxy, not ground truth.
-- Ball path is a hypothesis. Verify against a minute of hand-checked frames.
+- Ball path is a hypothesis. Weak candidates that stay at one spot for 3 s or more are dropped as clutter (markers, spare balls). Verify against a minute of hand-checked frames.
+- The best tracker config often sits at the edge of the grid. If it does, widen the grid before trusting it.
 
 ## Phase 1 record (tracker in the loop, superseded by the pipeline above)
 `phase1_track.py` and `phase1_ball_baseline.py` are kept for reference. Clip: one JV game video, start 00:14:00,
