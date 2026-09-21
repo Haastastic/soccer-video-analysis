@@ -202,18 +202,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("frame", help="write a still with a pixel grid to read landmark positions from")
-    f.add_argument("--run", required=True, type=Path)
+    f.add_argument("--run", required=True, type=require_under_data)
     f.add_argument("--time", required=True, type=float, help="seconds into the clip")
     f.set_defaults(fn=cmd_frame)
     a = sub.add_parser("apply", help="convert tracklet foot positions to pitch meters")
-    a.add_argument("--run", required=True, type=Path)
+    a.add_argument("--run", required=True, type=require_under_data)
     a.add_argument("--anchors", type=Path, default=ANCHORS_FILE)
     a.set_defaults(fn=cmd_apply)
     t = sub.add_parser("self-test", help="check the homography propagation on synthetic camera motion")
     t.set_defaults(fn=lambda _: self_test())
     args = ap.parse_args()
-    if getattr(args, "run", None) is not None:
-        args.run = require_under_data(args.run)
     args.fn(args)
 
 

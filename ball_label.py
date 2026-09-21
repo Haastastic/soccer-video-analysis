@@ -274,19 +274,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     lab = sub.add_parser("label", help="label the true ball position, one frame at a time")
-    lab.add_argument("--run", required=True, type=Path)
+    lab.add_argument("--run", required=True, type=require_under_data)
     lab.add_argument("--start", type=float, default=150, help="window start, seconds into the clip")
     lab.add_argument("--duration", type=float, default=60)
     lab.add_argument("--step-s", type=float, default=0.5, help="seconds between labeled frames")
     lab.add_argument("--scale", type=float, default=0.7, help="display scale, lower it if the window is too big")
     lab.set_defaults(fn=cmd_label)
     sc = sub.add_parser("score", help="compare ball_path.csv with the labels")
-    sc.add_argument("--run", required=True, type=Path)
+    sc.add_argument("--run", required=True, type=require_under_data)
     sc.add_argument("--tol", type=float, default=20, help="pixels within which a prediction counts as on the ball")
     sc.set_defaults(fn=cmd_score)
     args = ap.parse_args()
-    if getattr(args, "run", None) is not None:
-        args.run = require_under_data(args.run)
     args.fn(args)
 
 

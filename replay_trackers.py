@@ -14,7 +14,6 @@ import argparse
 import itertools
 import json
 import time
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -144,7 +143,7 @@ def make_grid(kind: str):
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run", required=True, type=Path, help="run folder that contains cache/")
+    ap.add_argument("--run", required=True, type=require_under_data, help="run folder that contains cache/")
     ap.add_argument("--grid", choices=["quick", "full", "wide"], default="quick")
     ap.add_argument("--fps-list", default="10,15", help="replay rates, limited to what the cache supports")
     ap.add_argument(
@@ -155,8 +154,6 @@ def main() -> None:
     ap.add_argument("--person-floor", type=float, default=0.1, help="drop person detections below this before tracking")
     ap.add_argument("--expected-players", type=int, default=23)
     args = ap.parse_args()
-    if getattr(args, "run", None) is not None:
-        args.run = require_under_data(args.run)
 
     cache = Cache(args.run / "cache")
     persons = cache.det[(cache.det.cls == PERSON) & (cache.det.conf >= args.person_floor)].reset_index(drop=True)

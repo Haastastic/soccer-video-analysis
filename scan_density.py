@@ -38,7 +38,7 @@ def overlapping_pairs(xyxy: np.ndarray, iou_min: float = 0.1) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--video", required=True, type=Path)
-    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--out", required=True, type=require_under_data)
     ap.add_argument("--every", type=float, default=20, help="seconds between sampled frames")
     ap.add_argument("--window", type=float, default=300, help="proposed clip length in seconds")
     ap.add_argument("--exclude", action="append", default=[], help="HH:MM:SS-HH:MM:SS range to avoid, repeatable")
@@ -53,7 +53,6 @@ def main() -> None:
     ap.add_argument("--model", default="yolo11m.pt")
     ap.add_argument("--imgsz", type=int, default=1280)
     args = ap.parse_args()
-    args.out = require_under_data(args.out)
 
     args.out.mkdir(parents=True, exist_ok=True)
     scan_csv = args.out / "density_scan.csv"

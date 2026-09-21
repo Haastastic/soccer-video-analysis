@@ -11,7 +11,6 @@ Example (PowerShell, from the project folder):
 
 import argparse
 import json
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -23,13 +22,12 @@ from sv_common import require_under_data
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", required=True, type=Path, help="run folder that already contains clip.mp4")
+    ap.add_argument("--out", required=True, type=require_under_data, help="run folder that already contains clip.mp4")
     ap.add_argument("--model", default="yolo11m.pt", help="Ultralytics weights")
     ap.add_argument("--imgsz", type=int, default=1920, help="inference size, keep equal to the tracking runs")
     ap.add_argument("--conf", type=float, default=0.1, help="detector floor, keep equal to the tracking runs")
     ap.add_argument("--target-fps", type=float, default=10, help="approximate processing rate")
     args = ap.parse_args()
-    args.out = require_under_data(args.out)
 
     clip = args.out / "clip.mp4"
     if not clip.exists():
