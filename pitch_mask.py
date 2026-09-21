@@ -75,13 +75,11 @@ def on_pitch_table(run: Path, min_grass: float = MIN_GRASS) -> pd.DataFrame:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run", required=True, type=Path)
+    ap.add_argument("--run", required=True, type=require_under_data)
     ap.add_argument(
         "--min-grass", type=float, default=MIN_GRASS, help="foot grass fraction needed to count as on pitch"
     )
     args = ap.parse_args()
-    if getattr(args, "run", None) is not None:
-        args.run = require_under_data(args.run)
     df = on_pitch_table(args.run, args.min_grass)
     print(f"{len(df)} tracklets measured, {int(df.on_pitch.sum())} on the pitch, {int((~df.on_pitch).sum())} off it.")
     print("foot_grass quantiles:", df.foot_grass.quantile([0.1, 0.25, 0.5, 0.75, 0.9]).round(2).to_dict())

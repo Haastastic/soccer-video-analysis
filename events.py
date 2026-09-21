@@ -302,13 +302,11 @@ def write_montage(run: Path, ev: pd.DataFrame, info: dict, per_type: int = 4) ->
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--run", required=True, type=Path)
+    ap.add_argument("--run", required=True, type=require_under_data)
     ap.add_argument("--min-confidence", type=float, default=0.5, help="events below this go to the review queue")
     ap.add_argument("--montage", action="store_true", help="write events_montage.png, local review only")
     ap.add_argument("--allow-interpolated", action="store_true", help="count interpolated ball positions as contact")
     args = ap.parse_args()
-    if getattr(args, "run", None) is not None:
-        args.run = require_under_data(args.run)
 
     ev, info, cache = detect(args.run, args.min_confidence, args.allow_interpolated)
     if ev.empty:
