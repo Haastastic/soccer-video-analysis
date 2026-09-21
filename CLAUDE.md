@@ -41,12 +41,21 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Ball path coverage after filtering: A 52% detected (81% with interpolation, longest gap 5.1 s), B 63% detected (97% with interpolation, longest gap 1.3 s). UNVERIFIED against hand-labeled frames. Needs about 60 s of hand-checked ball positions.
 - scan_density.py must require zoomed-in play: the first pick was a pre-game stretch (static wide shot, cones, huddles) that looked crowded by overlap alone.
 
+## Phase 2 findings: team classification (team_classify.py)
+- Roles: target, opponent, official, goalkeeper, other, plus unknown for short or unmeasurable tracklets. Role prototypes are numeric Lab centers in kit_prototypes.local.json (git-ignored, made by calibrate + assign on a reference clip). Kit colors never go in committed files.
+- The cached patch medians were too contaminated by grass and skin on small players. classify re-measures colors from 8 frames per tracklet using non-grass pixels (about 8 min per clip because of video seeking, cached in tracklet_colors.csv). This made the clusters clean where the cached colors gave mixed clusters.
+- Color cannot separate players from people at the sideline (bench, coaches, vests) who wear the same kit. Each tracklet gets extent_h (path spread in body heights) and a sideline_suspect flag (8 s or more and extent under 0.75). Phase 3's pitch mask should decide on-pitch.
+- Clip A (the calibration clip): median on-pitch counts per frame 7 target, 7 opponent, 1 goalkeeper, 1 official. This is circular because the prototypes came from this clip.
+- Clip B (held-out, wider framing), sampled 8 tracklets per role by eye: opponent 7 of 8, official 3 of 3, other 8 of 8 non-players, target 5 of 8 (errors were sideline people and an official), goalkeeper 1 of 3 (two striped officials leaked in). Median confidence only 0.21 there, so most labels are low confidence. UNVERIFIED against labels, and samples are tiny.
+- `classify --refine` (adapts prototypes to the clip) leaked target players into other and opponents into official in a first test, so it is opt-in and not recommended.
+- Goalkeepers are one tracklet each per team and share color with officials in the hi-vis range. Treat the goalkeeper role as weak until identity (step 7) or labels exist.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
 3. Ball linking: ball_link.py (done with clutter filter, ball path unverified)
-4. Team classification from cached kit colors: NOT STARTED (next)
-5. Pitch calibration from visible lines: NOT STARTED
+4. Team classification: team_classify.py (done, unverified, goalkeeper weak, needs pitch mask to drop sideline people)
+5. Pitch calibration from visible lines: NOT STARTED (next)
 6. Event detection (possession, touch, pass, shot): NOT STARTED
 7. Identity assignment with roster, tracklet stitching, review UI: NOT STARTED
 8. Stats database and coaching tips: NOT STARTED
@@ -55,10 +64,11 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - One command for the current stage:
   python run_all.py --video <game.mp4> --start HH:MM:SS --duration 300 --out data\clipA --grid wide --share-dir <folder Claude can read>
 - Individual stages: detect_cache.py, replay_trackers.py, ball_link.py (each has --help)
+- Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
 1. (Needs the owner) Hand-check about 60 s of ball positions to score ball_path.csv. Until then treat the ball path as unverified.
-2. Build team classification (target team vs opponent vs referee vs goalkeepers, colors in LOCAL_CONTEXT.md) from the cached torso and leg colors.
+2. (Needs the owner) Label roles for about 40 tracklets to score team_classify.py. Until then treat roles as unverified.
 3. Start pitch calibration using the per-frame camera motion as the between-anchor transform.

@@ -8,3 +8,4 @@ __pycache__/
 LOCAL_CONTEXT.md
 CLAUDE.local.md
 share/
+*.local.json
