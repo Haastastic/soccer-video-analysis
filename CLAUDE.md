@@ -58,13 +58,21 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - pitch_calibrate.py is anchor based: the owner reads pixel positions of known landmarks in a few frames (`pitch_calibrate.py frame` writes a gridded still) and gives pitch coordinates in meters, so no pitch size is assumed. Each anchor's homography is carried to other frames by the cached camera motion (modeled as a similarity, so error grows with the time from an anchor; `apply` reports the cross-anchor error in meters). Exact to 1 mm on synthetic similarity motion (`self-test`). NOT run on real footage, because there are no anchors yet.
 - Shared frame reader: sv_common.read_frames decodes sequentially, about 30 times faster than seeking.
 
+## Phase 4 findings: events (events.py)
+- Detects possession segments, touches, passes and turnovers from ball_path.csv, best_tracklets.csv.gz and tracklet_roles.csv. Distances are in body heights, so it needs no pitch calibration. Shots are NOT detected (they need the goal position, so they wait for calibration).
+- Every event has a confidence and ball_detected_share. Events under 0.5 go to review_queue.csv. Thresholds (contact 0.6 body heights, touch velocity change 2 body heights per second, possession 0.4 s, pass gap 3 s, same-player merge under 1.5 body heights) are hand-set guesses, not tuned.
+- Clip A: 71 touches, 57 possessions, 9 passes, 17 turnovers in 4 min; possession time 42 s target, 25 s opponent; median possession 0.7 s; ball in contact for 33% of frames. Clip B: 143 touches, 103 possessions, 19 passes, 32 turnovers, median confidence 0.47, over half in the review queue.
+- Sampled 16 events on clip A by eye: about 11 looked plausible (ball at the credited player's feet). Touches were weakest (2 of 4). The failures come from ball path errors (a resting spare ball near the bench, interpolated ball positions on empty grass) and sideline people counted as players. Confidence is only weakly informative: some wrong events scored 0.7. UNVERIFIED against labels.
+- Tracklets fragment (about 13 IDs per player), so the pass count is rough. Handoffs under 1.5 body heights apart are merged as one player.
+- Ball speed p99 is 16 body heights per s on clip A once path segment breaks are masked (it was 74 when velocities were taken across breaks).
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
 3. Ball linking: ball_link.py (done with clutter filter, ball path unverified)
 4. Team classification: team_classify.py (done, unverified, goalkeeper weak)
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (tool done, self-tested, BLOCKED on owner anchors for metric coordinates)
-6. Event detection (possession, touch, pass, shot): NOT STARTED
+6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
 7. Identity assignment with roster, tracklet stitching, review UI: NOT STARTED
 8. Stats database and coaching tips: NOT STARTED
 
@@ -72,6 +80,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - One command for the current stage:
   python run_all.py --video <game.mp4> --start HH:MM:SS --duration 300 --out data\clipA --grid wide --share-dir <folder Claude can read>
 - Individual stages: detect_cache.py, replay_trackers.py, ball_link.py (each has --help)
+- Events: events.py --run <run> [--montage] (needs ball_path.csv, tracklet_roles.csv)
 - Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
@@ -80,4 +89,5 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 1. (Needs the owner) Hand-check about 60 s of ball positions to score ball_path.csv. Until then treat the ball path as unverified.
 2. (Needs the owner) Label roles for about 40 tracklets to score team_classify.py. Until then treat roles as unverified.
 3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
-4. Step 6, event detection (possession, touch, pass), on stable coordinates with distances in body heights. Shots need the goal position, so they wait for calibration.
+4. (Needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
+5. STOP POINT REACHED (owner's limit was step 6). Step 7 (identity, roster, review UI) needs roster.csv, which does not exist, plus jersey anchors. Do not start it without the owner.
