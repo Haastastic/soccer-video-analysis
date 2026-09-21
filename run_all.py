@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 def step(title: str, cmd: list) -> None:
     print(f"\n=== {title} ===")
     print(" ".join(str(c) for c in cmd))
-    subprocess.run([sys.executable, *[str(c) for c in cmd]], check=True, cwd=HERE)
+    subprocess.run([sys.executable, "-u", *[str(c) for c in cmd]], check=True, cwd=HERE)  # -u: live progress in logs
 
 
 def main() -> None:
@@ -34,8 +34,9 @@ def main() -> None:
     ap.add_argument("--start", default=None)
     ap.add_argument("--duration", type=float, default=None)
     ap.add_argument("--model", default="yolo11m.pt")
-    ap.add_argument("--grid", choices=["quick", "full"], default="quick")
-    ap.add_argument("--fps-list", default="10,15,30")
+    ap.add_argument("--grid", choices=["quick", "full", "wide"], default="quick")
+    ap.add_argument("--fps-list", default="10,15")
+    ap.add_argument("--trackers", default="botsort", help="comma list, see replay_trackers.py")
     ap.add_argument("--redetect", action="store_true", help="rebuild the cache even if it exists")
     ap.add_argument("--share-dir", type=Path, default=None)
     args = ap.parse_args()
@@ -63,7 +64,20 @@ def main() -> None:
             )
             print(f"WARNING: {stale_warning}")
 
-    step("2/3 Tracker replay", ["replay_trackers.py", "--run", out, "--grid", args.grid, "--fps-list", args.fps_list])
+    step(
+        "2/3 Tracker replay",
+        [
+            "replay_trackers.py",
+            "--run",
+            out,
+            "--grid",
+            args.grid,
+            "--fps-list",
+            args.fps_list,
+            "--trackers",
+            args.trackers,
+        ],
+    )
     step("3/3 Ball linking", ["ball_link.py", "--run", out, "--fps", "10"])
 
     meta = json.loads((out / "cache" / "meta.json").read_text())

@@ -71,6 +71,30 @@ def link(pf, x, y, conf, fps, vmax, reward_base, w_move, gap_cost, restart_cost,
     return np.array(path), is_restart
 
 
+def static_clutter_mask(pf, sx, sy, conf, fps, radius, min_s, max_conf):
+    """True for low-confidence candidates that sit at the same stable spot in at least min_s of frames.
+
+    Static white objects (sideline markers, bags on carts) look like a ball and would otherwise win the
+    linking because a stationary candidate is trivially plausible. Confident candidates are kept, so a ball
+    at rest for a kickoff or goal kick survives.
+    """
+    cells = [tuple(c) for c in np.floor(np.stack([sx, sy], axis=1) / radius).astype(int)]
+    frames_in_cell = {}
+    for cell, f in zip(cells, pf, strict=True):
+        frames_in_cell.setdefault(cell, set()).add(int(f))
+    need = max(2, int(round(min_s * fps)))
+    mask = np.zeros(len(pf), dtype=bool)
+    for i, (cx, cy) in enumerate(cells):
+        if conf[i] >= max_conf:
+            continue
+        frames = set()
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                frames |= frames_in_cell.get((cx + dx, cy + dy), set())
+        mask[i] = len(frames) >= need
+    return mask
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=Path)
@@ -89,6 +113,9 @@ def main() -> None:
     ap.add_argument("--max-gap-s", type=float, default=1.5, help="longest gap a link may span")
     ap.add_argument("--interp-s", type=float, default=1.0, help="interpolate across gaps up to this long")
     ap.add_argument("--min-seg", type=int, default=3, help="drop segments shorter than this unless very confident")
+    ap.add_argument("--static-s", type=float, default=3.0, help="drop weak candidates stationary for this long, 0=off")
+    ap.add_argument("--static-px", type=float, default=15, help="stable-coordinate radius that counts as the same spot")
+    ap.add_argument("--static-conf", type=float, default=0.6, help="candidates at or above this conf are never dropped")
     args = ap.parse_args()
 
     cache = Cache(args.run / "cache")
@@ -110,11 +137,22 @@ def main() -> None:
     jumps = np.hypot(np.diff(tsx), np.diff(tsy))
     top1_teleport = float((jumps[consec] > 150).mean() * 100) if consec.any() else 0.0
 
+    n_candidates_raw = len(b)
+    n_static_removed = 0
+    if args.static_s > 0 and len(b):
+        clutter = static_clutter_mask(
+            b.pf.to_numpy(), sx, sy, b.conf.to_numpy(), fps, args.static_px, args.static_s, args.static_conf
+        )
+        n_static_removed = int(clutter.sum())
+        b, sx, sy = b[~clutter].reset_index(drop=True), sx[~clutter], sy[~clutter]
+
     if len(b) == 0:
         report = {
             "processed_frames": n_proc,
             "fps": round(fps, 2),
             "candidates_used": 0,
+            "candidates_raw": n_candidates_raw,
+            "static_candidates_removed": n_static_removed,
             "note": "No ball candidates in the cache at this confidence floor.",
         }
         (args.run / "ball_link_report.json").write_text(json.dumps(report, indent=2))
@@ -196,6 +234,8 @@ def main() -> None:
         "processed_frames": n_proc,
         "fps": round(fps, 2),
         "candidates_used": int(len(b)),
+        "candidates_raw": n_candidates_raw,
+        "static_candidates_removed": n_static_removed,
         "frames_with_any_candidate_pct": round(100 * b.pf.nunique() / n_proc, 1),
         "top1_teleport_pct_before": round(top1_teleport, 1),
         "path_detected_pct": round(100 * float(det_only.mean()), 1),
