@@ -41,6 +41,7 @@ def main() -> None:
     args = ap.parse_args()
 
     out = args.out.resolve()
+    stale_warning = None
     if args.redetect or not (out / "cache" / "meta.json").exists():
         cmd = ["detect_cache.py", "--video", args.video, "--out", out, "--model", args.model]
         if args.start is not None and args.duration is not None:
@@ -54,11 +55,13 @@ def main() -> None:
         if (args.start, args.duration) != (old.get("clip_start"), old.get("clip_duration")) or (
             old.get("model") != args.model
         ):
-            print(
-                "WARNING: the cache was built with a different start, duration or model "
-                f"({old.get('clip_start')}, {old.get('clip_duration')}, {old.get('model')}). "
+            stale_warning = (
+                "the cache was built with a different start, duration or model than requested "
+                f"(cache: {old.get('clip_start')}, {old.get('clip_duration')}, {old.get('model')}; "
+                f"requested: {args.start}, {args.duration}, {args.model}). "
                 "Add --redetect if you meant to change them."
             )
+            print(f"WARNING: {stale_warning}")
 
     step("2/3 Tracker replay", ["replay_trackers.py", "--run", out, "--grid", args.grid, "--fps-list", args.fps_list])
     step("3/3 Ball linking", ["ball_link.py", "--run", out, "--fps", "10"])
@@ -68,6 +71,7 @@ def main() -> None:
     lines = [
         f"# Phase 1b report: {out.name}",
         "",
+        *([f"> **WARNING:** {stale_warning}", ""] if stale_warning else []),
         "## Cache",
         f"- Source {meta['width']}x{meta['height']} at {meta['source_fps']:.1f} fps, "
         f"cached at {meta['cache_fps']:.1f} fps, {meta['n_cached_frames']} frames",
