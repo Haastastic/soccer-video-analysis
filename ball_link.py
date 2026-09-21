@@ -141,6 +141,8 @@ def main() -> None:
     ap.add_argument("--static-px", type=float, default=15, help="stable-coordinate radius that counts as the same spot")
     ap.add_argument("--static-conf", type=float, default=0.6, help="candidates at or above this conf are never dropped")
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
 
     cache = Cache(args.run / "cache")
     out_dir = args.out or args.run

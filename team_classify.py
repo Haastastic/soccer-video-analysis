@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from pitch_mask import on_pitch_table
-from sv_common import Cache, cache_stride, cached_per_tracklet, read_frames, sample_rows
+from sv_common import Cache, cache_stride, cached_per_tracklet, read_frames, require_under_data, sample_rows
 
 ROLES = ["target", "opponent", "official", "goalkeeper", "other"]
 COLOR_COLS = ["torso_r", "torso_g", "torso_b", "legs_r", "legs_g", "legs_b"]
@@ -326,6 +326,8 @@ def main() -> None:
     k.add_argument("--montage", action="store_true", help="also write roles_montage.png, local review only")
     k.set_defaults(fn=cmd_classify)
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
     args.fn(args)
 
 
