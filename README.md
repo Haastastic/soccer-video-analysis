@@ -36,6 +36,14 @@ Prototypes live in the git-ignored kit_prototypes.local.json. The first run on a
 video (about 16 seconds) and caches them. Color cannot separate players from people at the sideline, so use the
 sideline_suspect flag and, later, the pitch mask. Roles are unverified against labels.
 
+## Checking the ball path by hand
+python ball_label.py label --run data\clipA --start 150 --duration 60    # opens a window, about 10 minutes
+python ball_label.py score --run data\clipA                              # writes ball_score.json
+One frame every 0.5 s, with the predicted ball circled and a 3x zoom inset. Keys: `y` circle is on the ball, left
+click where the ball is (on the inset for precision), `x` not visible, `s` skip, `b` back, right click to move the
+inset, `q` quit. Progress is saved after every frame, so run it again to resume. Labels go to ball_truth.csv
+(git-ignored). `score` reports how often the path is on, off, or missing the ball, split by detected vs interpolated.
+
 ## Events
 python events.py --run data\clipA --montage    # events.csv, review_queue.csv, event_report.json (needs ball_path.csv and tracklet_roles.csv)
 Possession, touches, passes and turnovers in body-height units. Shots are not detected. Every event has a confidence
