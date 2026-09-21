@@ -170,6 +170,11 @@ def detect(run: Path, min_confidence: float):
     dvx, dvy = np.full(n, np.nan), np.full(n, np.nan)
     dvx[1:-1], dvy[1:-1] = vx[2:] - vx[:-2], vy[2:] - vy[:-2]
     ok_seg = same_seg & np.r_[same_seg[1:], False]  # frames i-1, i, i+1 share a segment
+    # ...and are consecutive grid frames: a hole inside a segment (gaps of 1 to 1.5 s are not interpolated) would
+    # stretch the window and inflate the velocity change.
+    step = int(np.median(np.diff(ci))) if n > 1 else 1
+    even = np.r_[False, (ci[1:-1] - ci[:-2] == step) & (ci[2:] - ci[1:-1] == step), False]
+    ok_seg = ok_seg & even
     dv_h = np.hypot(dvx, dvy) * scale / h_ref / 2  # body heights per second, over the 2-frame window
     cand = np.flatnonzero(ok_seg & np.isfinite(dv_h) & (dv_h >= TOUCH_DV_H) & (dmin <= TOUCH_H))
     last = -(10**9)
