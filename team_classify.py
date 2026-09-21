@@ -15,6 +15,7 @@ Workflow:
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -104,11 +105,26 @@ def patch_lab(img, x1, y1, x2, y2):
     return np.median(lab, axis=0)
 
 
+def cache_stride(run: Path) -> int:
+    """Video frames per cached frame. ci counts cached frames, so the clip frame is ci * stride."""
+    return int(json.loads((run / "cache" / "meta.json").read_text()).get("stride", 1))
+
+
+def tracklet_fingerprint(tr: pd.DataFrame) -> str:
+    """Identifies this exact set of tracklets, so cached colors are never joined onto regenerated track IDs."""
+    cols = tr[["track_id", "ci", "x1", "y1", "x2", "y2"]].to_numpy()
+    return hashlib.sha1(cols.tobytes() + f"{DESCRIPTOR}:{SAMPLES}".encode()).hexdigest()
+
+
 def pixel_colors(run: Path, tr: pd.DataFrame) -> pd.DataFrame:
     """Re-measure kit colors from SAMPLES frames per tracklet. Cached in tracklet_colors.csv."""
-    dest = run / "tracklet_colors.csv"
-    if dest.exists():
+    dest, stamp = run / "tracklet_colors.csv", run / "tracklet_colors.sha1"
+    fingerprint = tracklet_fingerprint(tr)
+    if dest.exists() and stamp.exists() and stamp.read_text().strip() == fingerprint:
         return pd.read_csv(dest, index_col="track_id")
+    if dest.exists():
+        print("Tracklets changed since the colors were measured, re-measuring.")
+    stride = cache_stride(run)
     cap = cv2.VideoCapture(str(run / "clip.mp4"))
     out = {}
     for tid, d in tr.groupby("track_id"):
@@ -118,7 +134,7 @@ def pixel_colors(run: Path, tr: pd.DataFrame) -> pd.DataFrame:
         rows = d.iloc[np.linspace(0, len(d) - 1, min(SAMPLES, len(d))).round().astype(int)]
         vals = []
         for r in rows.itertuples():
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(r.ci))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(r.ci) * stride)
             ok, img = cap.read()
             if not ok:
                 continue
@@ -137,6 +153,7 @@ def pixel_colors(run: Path, tr: pd.DataFrame) -> pd.DataFrame:
     df = pd.DataFrame.from_dict(out, orient="index", columns=LAB_COLS)
     df.index.name = "track_id"
     df.to_csv(dest)
+    stamp.write_text(fingerprint)
     return df
 
 
@@ -173,6 +190,7 @@ def write_montage(run: Path, groups: dict, dest: Path, per_row: int = 8) -> bool
         print("No clip.mp4 in the run folder, skipping the montage.")
         return False
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
+    stride = cache_stride(run)
     cap = cv2.VideoCapture(str(clip))
     rng = np.random.default_rng(3)
     rows = []
@@ -181,7 +199,7 @@ def write_montage(run: Path, groups: dict, dest: Path, per_row: int = 8) -> bool
         for tid in rng.choice(members, min(per_row, len(members)), replace=False) if len(members) else []:
             d = tr[tr.track_id == tid]
             r = d.iloc[len(d) // 2]
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(r.ci))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(r.ci) * stride)
             ok, img = cap.read()
             if not ok:
                 continue
