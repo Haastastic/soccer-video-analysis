@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import PERSON, parse_time
+from sv_common import PERSON, parse_time, require_under_data
 
 
 def overlapping_pairs(xyxy: np.ndarray, iou_min: float = 0.1) -> int:
@@ -53,6 +53,7 @@ def main() -> None:
     ap.add_argument("--model", default="yolo11m.pt")
     ap.add_argument("--imgsz", type=int, default=1280)
     args = ap.parse_args()
+    args.out = require_under_data(args.out)
 
     args.out.mkdir(parents=True, exist_ok=True)
     scan_csv = args.out / "density_scan.csv"

@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from phase1_track import BALL, longest_gap_seconds
+from sv_common import require_under_data
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
     ap.add_argument("--conf", type=float, default=0.1, help="detector floor, keep equal to the tracking runs")
     ap.add_argument("--target-fps", type=float, default=10, help="approximate processing rate")
     args = ap.parse_args()
+    args.out = require_under_data(args.out)
 
     clip = args.out / "clip.mp4"
     if not clip.exists():

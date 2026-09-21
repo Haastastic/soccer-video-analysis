@@ -25,6 +25,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from sv_common import require_under_data
+
 PERSON, BALL = 0, 32  # COCO class ids: person, sports ball
 HERE = Path(__file__).resolve().parent
 
@@ -121,6 +123,7 @@ def main() -> None:
     ap.add_argument("--min-crop-height", type=int, default=60, help="skip crops shorter than this many pixels")
     ap.add_argument("--recut", action="store_true", help="force re-cutting the clip")
     args = ap.parse_args()
+    args.out = require_under_data(args.out)
 
     args.out.mkdir(parents=True, exist_ok=True)
     clip = args.out / "clip.mp4"

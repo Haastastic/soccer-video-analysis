@@ -11,6 +11,7 @@ frame rate simply take every m-th cached frame and compose the camera motion in 
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,26 @@ import numpy as np
 import pandas as pd
 
 PERSON, BALL = 0, 32
+DATA_DIR = Path(__file__).resolve().parent / "data"
+
+
+def require_under_data(path: Path) -> Path:
+    """Exit unless path is this repo's data/ folder or inside it, and return it unchanged.
+
+    Everything the pipeline writes is derived from footage of minors, and only data/ is git-ignored. The check
+    compares resolved paths, case-insensitively on Windows, so a folder that merely has "data" in its name, or a
+    path outside the repo, is refused.
+    """
+    resolved = Path(os.path.normcase(str(Path(path).resolve())))
+    root = Path(os.path.normcase(str(DATA_DIR.resolve())))
+    if resolved != root and root not in resolved.parents:
+        raise SystemExit(
+            f"{path} is not under {DATA_DIR}. Outputs are derived from footage of minors "
+            "and must stay in the git-ignored data/ folder of this repo."
+        )
+    return Path(path)
+
+
 CAM_COLS = ["m00", "m01", "m02", "m10", "m11", "m12"]
 COLOR_COLS = ["torso_r", "torso_g", "torso_b", "legs_r", "legs_g", "legs_b"]
 
