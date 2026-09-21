@@ -63,21 +63,30 @@ def read_frames(video: Path, frame_numbers):
 
     Decodes the clip once from the start and skips with grab(), which is far faster than seeking to each frame
     (a few thousand random seeks on 1080p H.264 took about 8 minutes, one sequential pass about a minute).
+    A frame that cannot be decoded is skipped. If the stream ends early, the remaining frames are lost, so the
+    shortfall is printed instead of being silent: callers otherwise see tracklets with missing samples.
     """
     wanted = sorted({int(f) for f in frame_numbers})
     cap = cv2.VideoCapture(str(video))
-    pos = 0
-    for f in wanted:
-        while pos < f:
-            if not cap.grab():
-                return
+    pos, yielded, ended_at = 0, 0, None
+    try:
+        for f in wanted:
+            while pos < f:
+                if not cap.grab():
+                    ended_at = pos
+                    return
+                pos += 1
+            ok, img = cap.read()
             pos += 1
-        ok, img = cap.read()
-        pos += 1
-        if not ok:
-            return
-        yield f, img
-    cap.release()
+            if not ok:
+                continue
+            yielded += 1
+            yield f, img
+    finally:
+        cap.release()
+        if yielded < len(wanted):
+            where = f" (stream ended near frame {ended_at})" if ended_at is not None else ""
+            print(f"WARNING: read_frames got {yielded} of {len(wanted)} requested frames from {video}{where}.")
 
 
 def cache_stride(run: Path) -> int:
