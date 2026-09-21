@@ -1,0 +1,53 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # Workaround: claude-code-action@v1 has been failing to install its own
+      # `claude` binary on the runner. Install it explicitly first. Remove this
+      # step once the action bootstraps reliably again.
+      - name: Install Claude Code CLI
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/claude" --version
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Review the diff on this pull request for correctness bugs, security
+            issues, and clear design problems. This repo is a soccer video analysis
+            pipeline (YOLO detection plus ByteTrack/BoT-SORT tracking, run as
+            in-tree scripts) and its footage shows minors, so pay attention to:
+            - anything that would commit or expose footage, crops, annotated video,
+              rosters, or names of players or schools (data/, *.mp4 and roster.csv
+              are meant to stay git-ignored and local),
+            - metric code that could silently mis-measure (frame indexing, stride
+              and effective fps, ball/person thresholds, tracker config changes),
+            - subprocess and file-path handling.
+
+            Use `mcp__github_inline_comment__create_inline_comment` to leave a
+            comment on each specific line that has a real issue. Keep comments
+            concise and actionable. Do not comment on style or formatting, since
+            Ruff already gates that. If you find nothing worth flagging, say so
+            briefly and post no comments.
+          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'

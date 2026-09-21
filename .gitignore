@@ -1,0 +1,7 @@
+data/
+roster.csv
+*.mp4
+*.pt
+.venv/
+__pycache__/
+.ruff_cache/

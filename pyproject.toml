@@ -1,0 +1,10 @@
+# Project tooling config. The code runs in-tree as scripts, not as an installed package.
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/F = pyflakes + pycodestyle, I = import sorting, B = bugbear, UP = pyupgrade,
+# SIM = simplify, PD = pandas-vet
+select = ["E", "F", "I", "B", "UP", "SIM", "PD"]
