@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from sv_common import require_under_data
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -40,6 +42,7 @@ def main() -> None:
     ap.add_argument("--redetect", action="store_true", help="rebuild the cache even if it exists")
     ap.add_argument("--share-dir", type=Path, default=None)
     args = ap.parse_args()
+    args.out = require_under_data(args.out)
 
     out = args.out.resolve()
     stale_warning = None

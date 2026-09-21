@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sv_common import BALL, Cache
+from sv_common import BALL, Cache, require_under_data
 
 
 def link(pf, x, y, conf, fps, vmax, reward_base, w_move, gap_cost, restart_cost, max_gap_s):
@@ -144,11 +144,8 @@ def main() -> None:
 
     cache = Cache(args.run / "cache")
     out_dir = args.out or args.run
-    if args.out is not None and "data" not in args.out.resolve().parts:
-        raise SystemExit(
-            f"--out {args.out} is outside data/. Outputs are derived from footage of minors "
-            "and must stay in the git-ignored data/ tree."
-        )
+    if args.out is not None:
+        require_under_data(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     idxs, fps = cache.processed_indices(args.fps)
     pf_of = {int(ci): k for k, ci in enumerate(idxs)}
