@@ -61,10 +61,10 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 ## Phase 4 findings: events (events.py)
 - Detects possession segments, touches, passes and turnovers from ball_path.csv, best_tracklets.csv.gz and tracklet_roles.csv. Distances are in body heights, so it needs no pitch calibration. Shots are NOT detected (they need the goal position, so they wait for calibration).
 - Every event has a confidence and ball_detected_share. Events under 0.5 go to review_queue.csv. Thresholds (contact 0.6 body heights, touch velocity change 2 body heights per second, possession 0.4 s, pass gap 3 s, same-player merge under 1.5 body heights) are hand-set guesses, not tuned.
-- Clip A: 71 touches, 57 possessions, 9 passes, 17 turnovers in 4 min; possession time 42 s target, 25 s opponent; median possession 0.7 s; ball in contact for 33% of frames. Clip B: 143 touches, 103 possessions, 19 passes, 32 turnovers, median confidence 0.47, over half in the review queue.
+- Clip A: 61 touches, 57 possessions, 9 passes, 17 turnovers in 4 min; possession time 42 s target, 25 s opponent; median possession 0.7 s; ball in contact for 33% of frames. Clip B: 140 touches, 103 possessions, 19 passes, 32 turnovers, median confidence 0.48, over half in the review queue.
 - Sampled 16 events on clip A by eye: about 11 looked plausible (ball at the credited player's feet). Touches were weakest (2 of 4). The failures come from ball path errors (a resting spare ball near the bench, interpolated ball positions on empty grass) and sideline people counted as players. Confidence is only weakly informative: some wrong events scored 0.7. UNVERIFIED against labels.
 - Tracklets fragment (about 13 IDs per player), so the pass count is rough. Handoffs under 1.5 body heights apart are merged as one player.
-- Ball speed p99 is 16 body heights per s on clip A once path segment breaks are masked (it was 74 when velocities were taken across breaks).
+- Ball velocity is computed within each ball-path segment (time-aware), never across a break. Taking it across breaks gave a p99 speed of 74 body heights per s and 10 false touches on clip A (71 before, 61 after; p99 is now 14). The 16-event sample above was taken before this fix.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
