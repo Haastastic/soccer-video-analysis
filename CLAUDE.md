@@ -86,7 +86,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
-1. (Needs the owner) Hand-check about 60 s of ball positions to score ball_path.csv. Until then treat the ball path as unverified.
+1. (Needs the owner) Hand-check about 60 s of ball positions: run `python ball_label.py label --run data\clipA` in a normal terminal (a window opens, about 10 minutes), then `python ball_label.py score --run data\clipA`. Until then treat the ball path as unverified.
 2. (Needs the owner) Label roles for about 40 tracklets to score team_classify.py. Until then treat roles as unverified.
 3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
 4. (Needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
