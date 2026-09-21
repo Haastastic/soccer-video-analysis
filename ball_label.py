@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, cache_stride, read_frames
+from sv_common import Cache, cache_stride, read_frames, require_under_data
 
 WINDOW = "ball label"
 INSET_SRC, INSET_ZOOM = 128, 3  # source pixels shown in the inset, and its magnification
@@ -285,6 +285,8 @@ def main() -> None:
     sc.add_argument("--tol", type=float, default=20, help="pixels within which a prediction counts as on the ball")
     sc.set_defaults(fn=cmd_score)
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
     args.fn(args)
 
 

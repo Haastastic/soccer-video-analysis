@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import cache_stride, cached_per_tracklet, read_frames, sample_rows
+from sv_common import cache_stride, cached_per_tracklet, read_frames, require_under_data, sample_rows
 
 SAMPLES = 8
 SCALE = 0.5  # the mask is computed at half resolution
@@ -80,6 +80,8 @@ def main() -> None:
         "--min-grass", type=float, default=MIN_GRASS, help="foot grass fraction needed to count as on pitch"
     )
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
     df = on_pitch_table(args.run, args.min_grass)
     print(f"{len(df)} tracklets measured, {int(df.on_pitch.sum())} on the pitch, {int((~df.on_pitch).sum())} off it.")
     print("foot_grass quantiles:", df.foot_grass.quantile([0.1, 0.25, 0.5, 0.75, 0.9]).round(2).to_dict())

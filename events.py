@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, cache_stride, read_frames
+from sv_common import Cache, cache_stride, read_frames, require_under_data
 
 TEAM_ROLES = {"target": "target", "opponent": "opponent", "goalkeeper": "goalkeeper"}
 CONTACT_H = 0.6  # ball this close to the feet (in body heights) counts as contact
@@ -307,6 +307,8 @@ def main() -> None:
     ap.add_argument("--montage", action="store_true", help="write events_montage.png, local review only")
     ap.add_argument("--allow-interpolated", action="store_true", help="count interpolated ball positions as contact")
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
 
     ev, info, cache = detect(args.run, args.min_confidence, args.allow_interpolated)
     if ev.empty:

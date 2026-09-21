@@ -26,7 +26,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import CAM_COLS, Cache, cache_stride
+from sv_common import CAM_COLS, Cache, cache_stride, require_under_data
 
 ANCHORS_FILE = Path(__file__).resolve().parent / "pitch_anchors.local.json"
 
@@ -212,6 +212,8 @@ def main() -> None:
     t = sub.add_parser("self-test", help="check the homography propagation on synthetic camera motion")
     t.set_defaults(fn=lambda _: self_test())
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
     args.fn(args)
 
 

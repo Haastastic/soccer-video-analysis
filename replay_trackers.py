@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sv_common import COLOR_COLS, PERSON, Cache, track_metrics
+from sv_common import COLOR_COLS, PERSON, Cache, require_under_data, track_metrics
 
 DEFAULTS = dict(
     tracker_type="bytetrack",
@@ -155,6 +155,8 @@ def main() -> None:
     ap.add_argument("--person-floor", type=float, default=0.1, help="drop person detections below this before tracking")
     ap.add_argument("--expected-players", type=int, default=23)
     args = ap.parse_args()
+    if getattr(args, "run", None) is not None:
+        args.run = require_under_data(args.run)
 
     cache = Cache(args.run / "cache")
     persons = cache.det[(cache.det.cls == PERSON) & (cache.det.conf >= args.person_floor)].reset_index(drop=True)
