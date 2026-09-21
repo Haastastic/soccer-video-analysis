@@ -111,7 +111,12 @@ def static_clutter_mask(pf, sx, sy, conf, fps, radius, min_s, max_conf, max_gap_
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=Path)
-    ap.add_argument("--out", type=Path, default=None, help="write results here instead of the run folder")
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="write results here instead of the run folder (keep it under data/, the outputs are derived from footage)",
+    )
     ap.add_argument("--fps", type=float, default=10, help="processing rate for linking")
     ap.add_argument("--min-conf", type=float, default=0.05)
     ap.add_argument(
@@ -139,6 +144,11 @@ def main() -> None:
 
     cache = Cache(args.run / "cache")
     out_dir = args.out or args.run
+    if args.out is not None and "data" not in args.out.resolve().parts:
+        raise SystemExit(
+            f"--out {args.out} is outside data/. Outputs are derived from footage of minors "
+            "and must stay in the git-ignored data/ tree."
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
     idxs, fps = cache.processed_indices(args.fps)
     pf_of = {int(ci): k for k, ci in enumerate(idxs)}
