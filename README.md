@@ -28,6 +28,14 @@ python run_all.py --video D:\games\game.mp4 --start 00:14:00 --duration 300 --ou
 python scan_density.py --video D:\games\game.mp4 --out data --exclude 00:14:00-00:19:00
 Samples the whole game and proposes the most crowded 5 minutes of zoomed-in live play. Add `--reuse` to re-pick from the saved scan.
 
+## Team roles
+python team_classify.py calibrate --run data\clipA           # cluster tracklet colors, writes a local review montage
+python team_classify.py assign --run data\clipA --map 1:target,6:opponent,2:official,...
+python team_classify.py classify --run data\clipB --montage   # writes tracklet_roles.csv and team_report.json
+Prototypes live in the git-ignored kit_prototypes.local.json. The first run on a clip measures kit colors from
+video (about 8 minutes) and caches them. Color cannot separate players from people at the sideline, so use the
+sideline_suspect flag and, later, the pitch mask. Roles are unverified against labels.
+
 ## Reading the report
 - Camera inliers: the median should be well above 50. If it is low, camera motion is unreliable and BoT-SORT results are not trustworthy.
 - Tracker score = new IDs per minute + 3 x swap suspects per minute. Lower is better. It is a proxy, not ground truth.
