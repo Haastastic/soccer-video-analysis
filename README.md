@@ -61,7 +61,7 @@ test runs.
 ## Reading the report
 - Camera inliers: the median should be well above 50. If it is low, camera motion is unreliable and BoT-SORT results are not trustworthy.
 - Tracker score = new IDs per minute + 3 x swap suspects per minute. Lower is better. It is a proxy, not ground truth.
-- Ball path: detected positions were 97% correct in a hand-checked window, interpolated only 63% and often ghosts, so gaps are interpolated up to 0.5 s and events ignore interpolated positions. Weak candidates that stay at one spot for a continuous 3 s or more are dropped as clutter (markers, spare balls). Isolated weak hits on a marker can still leak through. Verify against a minute of hand-checked frames.
+- Ball path: checked by hand on two 60 s windows. Detected positions were 95 to 98% correct, but low-confidence candidates were mostly ghosts, so candidates under confidence 0.25 are ignored (`--min-conf`) and gaps are interpolated up to 0.5 s. That trades coverage for precision (76 to 92%). Events ignore interpolated positions.
 - The best tracker config often sits at the edge of the grid. If it does, widen the grid before trusting it.
 
 ## Phase 1 record (tracker in the loop, superseded by the pipeline above)

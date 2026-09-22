@@ -117,7 +117,12 @@ def main() -> None:
         help="write results here instead of the run folder (keep it under data/, the outputs are derived from footage)",
     )
     ap.add_argument("--fps", type=float, default=10, help="processing rate for linking")
-    ap.add_argument("--min-conf", type=float, default=0.05)
+    ap.add_argument(
+        "--min-conf",
+        type=float,
+        default=0.25,
+        help="ball candidates below this confidence are ignored (0.25 tuned on two hand-labeled windows, was 0.05)",
+    )
     ap.add_argument(
         "--vmax",
         type=float,
