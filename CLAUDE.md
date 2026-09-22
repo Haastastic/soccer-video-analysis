@@ -51,6 +51,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Clip B (held-out, wider framing), sampled 8 tracklets per role by eye: opponent 7 of 8, official 3 of 3, other 8 of 8 non-players, target 5 of 8 (errors were sideline people and an official), goalkeeper 1 of 3 (two striped officials leaked in). Median confidence only 0.21 there, so most labels are low confidence. UNVERIFIED against labels, and samples are tiny.
 - `classify --refine` (adapts prototypes to the clip) leaked target players into other and opponents into official in a first test, so it is opt-in and not recommended.
 - Goalkeepers are one tracklet each per team and share color with officials in the hi-vis range. Treat the goalkeeper role as weak until identity (step 7) or labels exist.
+- HAND-CHECKED with role_label.py (owner, stratified sample across predicted roles, 20 tracklets per clip): 17 of 20 usable on clip A (3 skipped), 11 of 20 usable on clip B (9 skipped). Accuracy 64.7% (A) and 72.7% (B, tiny sample: single-digit support per role). Target and official are the most reliable, 100% precision on both clips. "Other" (non-players) is the weak point: only 40 to 50% recall, so about half of true non-players get misclassified as a real role. Confidence tracks correctness on A (mean 0.69 correct vs 0.16 wrong) but is compressed on B (0.25 vs 0.07).
+- The high skip rate on clip B (9 of 20, versus 3 of 20 on A) is not random: in at least 6 of those 9, the tracklet's box visibly follows two different people mid-lifetime (a player then a different player, or a player then match-official staff). One more is a real goalmouth scrum with several players overlapping. This is downstream of tracker ID fragmentation (about 13 fragments per real player, noted above): a tracklet whose box straddles two people gets a kit color that is the median of both, which plausibly explains why wrong predictions have much lower confidence than correct ones. Role accuracy is capped by tracklet quality and will not improve much until tracklets are stitched (step 7), which is past the current stop point. Retuning team_classify.py's thresholds on this sample was not attempted: per-role support is single digits, too small to trust a parameter change.
 
 ## Phase 3 findings: pitch mask and calibration (pitch_mask.py, pitch_calibrate.py)
 - pitch_mask.py measures the grass fraction in a window at each tracklet's feet (8 sampled frames, median). Combined with sideline_suspect it gives player_candidate in tracklet_roles.csv. team_classify.py now uses it.
@@ -73,7 +75,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
 3. Ball linking: ball_link.py (done; hand-checked on one 60 s window, 97% correct when detected, interpolation weak)
-4. Team classification: team_classify.py (done, unverified, goalkeeper weak)
+4. Team classification: team_classify.py (done; hand-checked, 65 to 73% accuracy, capped by tracklet fragmentation, goalkeeper weak)
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (tool done, self-tested, BLOCKED on owner anchors for metric coordinates)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
 7. Identity assignment with roster, tracklet stitching, review UI: NOT STARTED
@@ -90,7 +92,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 
 ## Next actions
 1. (Optional, owner) A third ball window from a different game would test whether min-conf 0.25 generalizes beyond these two clips.
-2. (Needs the owner) Label roles for about 40 tracklets: run `python role_label.py label --run data\clipA --n 20` in a normal terminal (opens a window), then the same for clipB, then `python role_label.py score --run data\clipA` (and clipB). Until then treat roles as unverified.
+2. DONE, with caveats: role_label.py hand-check completed on both clips (see Phase 2 findings). 65 to 73% accuracy, capped by tracklet ID fragmentation rather than the color model. Not retuned: per-role sample sizes are too small to trust a parameter change. Revisit after tracklet stitching (step 7) or a larger labeled set.
 3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
 4. (Needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
 5. STOP POINT REACHED (owner's limit was step 6). Step 7 (identity, roster, review UI) needs roster.csv, which does not exist, plus jersey anchors. Do not start it without the owner.
