@@ -90,7 +90,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 
 ## Next actions
 1. (Optional, owner) A third ball window from a different game would test whether min-conf 0.25 generalizes beyond these two clips.
-2. (Needs the owner) Label roles for about 40 tracklets to score team_classify.py. Until then treat roles as unverified.
+2. (Needs the owner) Label roles for about 40 tracklets: run `python role_label.py label --run data\clipA --n 20` in a normal terminal (opens a window), then the same for clipB, then `python role_label.py score --run data\clipA` (and clipB). Until then treat roles as unverified.
 3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
 4. (Needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
 5. STOP POINT REACHED (owner's limit was step 6). Step 7 (identity, roster, review UI) needs roster.csv, which does not exist, plus jersey anchors. Do not start it without the owner.
