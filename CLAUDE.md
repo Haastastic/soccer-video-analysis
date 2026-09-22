@@ -61,7 +61,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Clip A: only 3% of tracklets are off the pitch, because its bench sits on grass, so the motion flag (sitting still 8 s or more) does most of the work there. Clip B: 22% are off the pitch (track, stands).
 - Sampled on clip B: candidates were 8 of 8 target and 7 of 8 opponent real players. Excluded tracklets were mostly non-players (bench, spectators, coaches), but roughly a third of excluded target and opponent tracklets looked like real players (near the touchline or briefly static), so recall drops. min-grass and the static rule are the knobs.
 - Goalkeeper is unreliable on clip B: striped officials and the tan-kit goalkeeper land in the wrong classes. Not fixed.
-- pitch_calibrate.py is anchor based: the owner reads pixel positions of known landmarks in a few frames (`pitch_calibrate.py frame` writes a gridded still) and gives pitch coordinates in meters, so no pitch size is assumed. Each anchor's homography is carried to other frames by the cached camera motion (modeled as a similarity, so error grows with the time from an anchor; `apply` reports the cross-anchor error in meters). Exact to 1 mm on synthetic similarity motion (`self-test`). NOT run on real footage, because there are no anchors yet.
+- pitch_calibrate.py is anchor based: the owner reads pixel positions of known landmarks in a few frames and gives pitch coordinates in meters, so no pitch size is assumed. Each anchor's homography is carried to other frames by the cached camera motion (modeled as a similarity, so error grows with the time from an anchor; `apply` reports the cross-anchor error in meters). Exact to 1 mm on synthetic similarity motion (`self-test`). `pitch_anchor_ui.py --run <run>` is a local-only browser UI (127.0.0.1, no external calls) for placing anchors: click landmarks on a frame, quick-pick chips for the 9 standard Law-of-the-Game points fill in the pitch meters, and it saves the same JSON `pitch_calibrate.py` reads.
+- FIRST RUN ON REAL FOOTAGE (clipB, 2026-09-22): one anchor at 180.1s, 9 points (both goalposts, six-yard and eighteen-yard corners, both arc tangent points, arc apex), fit RMS 0.6 m. That RMS is for the anchor frame itself; only 6.0% of clipB's 95,664 tracklet rows fall within 10 s of that one anchor, so error away from 180.1s is unmeasured (cross_check is empty until there is a 2nd anchor to compare against). The 300 s clip needs 2 more anchors spread toward its start and end (for example ~30s and ~270s) before `tracklet_pitch_xy.csv.gz` positions can be trusted clip-wide.
 - Shared frame reader: sv_common.read_frames decodes sequentially, about 30 times faster than seeking.
 
 ## Phase 4 findings: events (events.py)
@@ -78,7 +79,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
 3. Ball linking: ball_link.py (done; hand-checked on one 60 s window, 97% correct when detected, interpolation weak)
 4. Team classification: team_classify.py (done; hand-checked, 65 to 73% accuracy, capped by tracklet fragmentation, goalkeeper weak)
-5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (tool done, self-tested, BLOCKED on owner anchors for metric coordinates)
+5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (tool done, self-tested; 1 anchor placed on clipB via pitch_anchor_ui.py, RMS 0.6 m, but only covers 6% of clipB's rows within 10s - needs 2 more anchors spread across the clip)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
 7. Identity assignment with roster, tracklet stitching, review UI: NOT STARTED
 8. Stats database and coaching tips: NOT STARTED
@@ -90,11 +91,12 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Events: events.py --run <run> [--montage] (needs ball_path.csv, tracklet_roles.csv)
 - Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
+- Place pitch anchors: pitch_anchor_ui.py --run <run> (local browser UI; writes pitch_anchors.local.json)
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
 1. DONE: a third hand-labeled window (same game, a different 5 minutes) confirmed min-conf 0.25 generalizes for precision (see Phase 1b findings). It also found a real detector blind spot on the boundary track, which is a separate, deeper limitation (retraining or new examples, not a pipeline setting) and is not being worked on now.
 2. DONE, with caveats: role_label.py hand-check completed on both clips (see Phase 2 findings). 65 to 73% accuracy, capped by tracklet ID fragmentation rather than the color model. Not retuned: per-role sample sizes are too small to trust a parameter change. Revisit after tracklet stitching (step 7) or a larger labeled set.
-3. (Needs the owner) Give 4 or more landmark points, with pitch coordinates in meters, in 3 or more frames per clip so pitch_calibrate.py apply can run. Use `pitch_calibrate.py frame --run <run> --time <s>` to get a gridded still. Until then, downstream work uses image or stable coordinates in body heights.
+3. IN PROGRESS (needs the owner): clipB has 1 anchor (180.1s, RMS 0.6 m) placed with pitch_anchor_ui.py, covering only 6% of its rows within 10s. Needs 2 more anchors spread across clipB (near ~30s and ~270s), then the same 3 anchors for clipA, before pitch positions can be trusted clip-wide. Use `pitch_anchor_ui.py --run <run>` to extract new frames and place points in the browser.
 4. (Needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
 5. STOP POINT REACHED (owner's limit was step 6). Step 7 (identity, roster, review UI) needs roster.csv, which does not exist, plus jersey anchors. Do not start it without the owner.
