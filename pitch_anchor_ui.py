@@ -55,8 +55,8 @@ INDEX_HTML = """<!doctype html>
   .layout { display: flex; gap: 16px; align-items: flex-start; }
   .imgcol { flex: 1 1 auto; min-width: 0; }
   .sidecol { flex: 0 0 420px; }
-  #wrap { position: relative; overflow: auto; max-height: 78vh; border: 1px solid #3a3a42; background: #000;
-    display: inline-block; }
+  #wrap { position: relative; overflow: auto; max-height: 78vh; max-width: 100%; border: 1px solid #3a3a42;
+    background: #000; display: inline-block; }
   #wrap img { display: block; image-rendering: pixelated; }
   #wrap canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated;
     cursor: crosshair; }
@@ -109,7 +109,9 @@ INDEX_HTML = """<!doctype html>
       <legend>Standard landmarks (Laws of the Game, meters)</legend>
       <div class="row" id="chips"></div>
       <div class="muted">Arm one, then click its spot on the image. X = distance from goal line, Y = across the
-        field. Pick a +Y side once and stay consistent across every frame you calibrate.</div>
+        field. "Near" means the touchline closer to the camera in THIS shot, "far" the one farther away - since
+        the camera stays on one side of the pitch all game, that's the same physical side in every frame, so you
+        never have to remember an abstract left/right or +/- convention.</div>
     </fieldset>
 
     <fieldset>
@@ -135,16 +137,18 @@ INDEX_HTML = """<!doctype html>
 </div>
 
 <script>
+// Y > 0 is the touchline nearer the camera, Y < 0 the far one. The camera sits on one fixed sideline all game,
+// so "near" and "far" are the same physical side in every frame - unlike +Y/-Y, which needs a memorized sign.
 const LANDMARKS = [
-  {name: "goalpost +Y", pitch: [0, 3.66]},
-  {name: "goalpost -Y", pitch: [0, -3.66]},
-  {name: "six-yard corner +Y", pitch: [5.5, 9.16]},
-  {name: "six-yard corner -Y", pitch: [5.5, -9.16]},
+  {name: "goalpost, near touchline", pitch: [0, 3.66]},
+  {name: "goalpost, far touchline", pitch: [0, -3.66]},
+  {name: "six-yard corner, near touchline", pitch: [5.5, 9.16]},
+  {name: "six-yard corner, far touchline", pitch: [5.5, -9.16]},
   {name: "penalty spot", pitch: [11, 0]},
-  {name: "eighteen-yard corner +Y", pitch: [16.5, 20.16]},
-  {name: "eighteen-yard corner -Y", pitch: [16.5, -20.16]},
-  {name: "arc tangent +Y", pitch: [16.5, 7.31]},
-  {name: "arc tangent -Y", pitch: [16.5, -7.31]},
+  {name: "eighteen-yard corner, near touchline", pitch: [16.5, 20.16]},
+  {name: "eighteen-yard corner, far touchline", pitch: [16.5, -20.16]},
+  {name: "arc tangent, near touchline", pitch: [16.5, 7.31]},
+  {name: "arc tangent, far touchline", pitch: [16.5, -7.31]},
   {name: "arc apex", pitch: [20.15, 0]},
 ];
 
