@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import cv2
+import numpy as np
 
 from pitch_calibrate import ANCHORS_FILE, apply_calibration, read_frame, solve_anchor
 from sv_common import require_under_data
@@ -44,6 +45,28 @@ def load_existing_anchors(path: Path) -> list:
         return json.loads(path.read_text()).get("anchors", [])
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def orientation_warnings(anchors: list) -> list:
+    """Flag anchors whose homography has the opposite orientation from the majority.
+
+    A fixed sideline camera should map pitch to image with the same handedness in every anchor. A lone anchor
+    with the opposite sign usually means a landmark was measured from the wrong goal (e.g. the far one instead
+    of the one used as the shared X=0 reference) or a near/far touchline mixup, not a camera-motion problem.
+    """
+    signs = []
+    for a in anchors:
+        h, _ = solve_anchor(a["points"])
+        signs.append(1 if np.linalg.det(h[:2, :2]) >= 0 else -1)
+    if len(set(signs)) < 2:
+        return []
+    majority = 1 if sum(signs) >= 0 else -1
+    return [
+        f"anchor at {a['time_s']}s has the opposite homography orientation from the other anchors - "
+        "check it uses the same reference goal and near/far touchline as the rest"
+        for a, s in zip(anchors, signs, strict=True)
+        if s != majority
+    ]
 
 
 INDEX_HTML = """<!doctype html>
@@ -79,6 +102,8 @@ INDEX_HTML = """<!doctype html>
   .rms-warn { color: #e0c34a; }
   .rms-bad { color: #e06a6a; }
   .muted { color: #9a9aa2; font-size: 12px; }
+  .warn-box { background: #3a2020; border: 1px solid #e06a6a; color: #f0a0a0; border-radius: 6px; padding: 8px;
+    margin: 8px 0; font-size: 12px; }
   pre { background: #111; padding: 8px; border-radius: 6px; overflow: auto; max-height: 260px; font-size: 12px; }
 </style></head>
 <body>
@@ -132,6 +157,7 @@ INDEX_HTML = """<!doctype html>
       <button class="primary" id="saveBtn">Save anchors</button>
       <button class="primary" id="saveApplyBtn">Save &amp; run apply</button>
     </div>
+    <div id="saveWarnings"></div>
     <pre id="result" style="display:none"></pre>
   </div>
 </div>
@@ -382,6 +408,14 @@ async function doSave() {
   const pre = document.getElementById("result");
   pre.style.display = "block";
   pre.textContent = ok ? JSON.stringify(data, null, 2) : "save failed: " + data.error;
+  const warnBox = document.getElementById("saveWarnings");
+  warnBox.innerHTML = "";
+  if (ok && data.warnings && data.warnings.length) {
+    const box = document.createElement("div");
+    box.className = "warn-box";
+    box.textContent = "⚠ " + data.warnings.join(" — ");
+    warnBox.appendChild(box);
+  }
   if (ok) renderAnchorsTableWithRms(data.anchor_fit_rms_m, anchors);
   return ok ? data : null;
 }
@@ -523,6 +557,7 @@ def make_handler(run: Path, anchors_out: Path):
                             "saved_to": str(anchors_out),
                             "anchor_fit_rms_m": rms_list,
                             "cross_check": cross_check,
+                            "warnings": orientation_warnings(anchors),
                         }
                     )
                 elif path == "/api/apply":
