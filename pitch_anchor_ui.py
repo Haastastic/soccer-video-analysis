@@ -9,7 +9,7 @@ the frames it serves show minors. Nothing here is written outside the run folder
 
 Usage:
   python pitch_anchor_ui.py --run data\\clipB
-  python pitch_anchor_ui.py --run data\\clipB --anchors-out data\\clipB\\pitch_anchors.local.json --port 8765
+  python pitch_anchor_ui.py --run data\\clipB --anchors-out pitch_anchors.local.json --port 8765
 """
 
 import argparse
@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 import cv2
 import numpy as np
 
-from pitch_calibrate import ANCHORS_FILE, apply_calibration, read_frame, solve_anchor
+from pitch_calibrate import apply_calibration, read_frame, solve_anchor
 from sv_common import require_under_data
 
 FRAME_RE = re.compile(r"^anchor_frame_-?[0-9.]+s\.png$")
@@ -575,10 +575,18 @@ def make_handler(run: Path, anchors_out: Path):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=require_under_data)
-    ap.add_argument("--anchors-out", type=Path, default=ANCHORS_FILE, help="where to write the anchors JSON")
+    ap.add_argument(
+        "--anchors-out",
+        type=Path,
+        default=None,
+        help="where to write the anchors JSON (default: <run>/pitch_anchors.local.json - each clip's anchors "
+        "are frame positions specific to that clip's footage, so they should not share one file across clips)",
+    )
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-browser", action="store_true", help="don't auto-open a browser tab")
     args = ap.parse_args()
+    if args.anchors_out is None:
+        args.anchors_out = args.run / "pitch_anchors.local.json"
 
     if not (args.run / "clip.mp4").exists():
         raise SystemExit(f"{args.run / 'clip.mp4'} not found - run detect_cache.py on this run first.")
