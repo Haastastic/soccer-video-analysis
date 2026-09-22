@@ -36,6 +36,15 @@ Prototypes live in the git-ignored kit_prototypes.local.json. The first run on a
 video (about 16 seconds) and caches them. Color cannot separate players from people at the sideline, so use the
 sideline_suspect flag and, later, the pitch mask. Roles are unverified against labels.
 
+## Checking team roles by hand
+python role_label.py label --run data\clipA --n 20    # opens a window, one tracklet at a time
+python role_label.py score --run data\clipA           # writes role_score.json
+Shows up to 4 crops per tracklet with the predicted role and confidence. Keys: `y` accept the prediction
+(does nothing for "unknown"), `t`/`o`/`f`/`g`/`x` for target/opponent/official/goalkeeper/other, `s` skip,
+`b` back, `q` quit. Progress is saved after every tracklet, so run it again to resume. Labels go to
+role_truth.csv (git-ignored). `score` re-reads the current tracklet_roles.csv, so it reflects the latest
+team_classify.py settings even if you relabel nothing.
+
 ## Checking the ball path by hand
 python ball_label.py label --run data\clipA --start 150 --duration 60    # opens a window, about 10 minutes
 python ball_label.py score --run data\clipA                              # writes ball_score.json
