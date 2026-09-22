@@ -167,6 +167,22 @@ def render(img_lookup: dict, item: dict, index: int, total: int, label: dict | N
     return canvas
 
 
+def save_labels(truth_path: Path, items: list, session: "Session", carry_over: pd.DataFrame | None) -> pd.DataFrame:
+    """Write this session's labels, plus any previously saved rows for track_ids outside this sample.
+
+    A rerun with a different --n, --seed, or a re-tuned team_classify.py picks a different sample, so writing
+    only session.table() would silently drop earlier hand labels for track_ids no longer sampled: expensive to
+    redo since it is manual labeling of footage of minors.
+    """
+    table = session.table()
+    if carry_over is not None and len(carry_over):
+        item_ids = {it["track_id"] for it in items}
+        carry = carry_over[~carry_over.track_id.isin(item_ids)]
+        table = pd.concat([carry, table], ignore_index=True)[TRUTH_COLS]
+    table.to_csv(truth_path, index=False)
+    return table
+
+
 def cmd_label(args) -> None:
     run = args.run
     truth_path = run / "role_truth.csv"
@@ -202,10 +218,10 @@ def cmd_label(args) -> None:
             elif key == ord("q"):
                 break
             if changed:
-                session.table().to_csv(truth_path, index=False)
+                save_labels(truth_path, items, session, saved)
     finally:
         cv2.destroyAllWindows()
-        session.table().to_csv(truth_path, index=False)
+        save_labels(truth_path, items, session, saved)
     print(f"Saved {len(session.labels)} of {len(items)} labels to {truth_path}. Run `score` when you are done.")
 
 
