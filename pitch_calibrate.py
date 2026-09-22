@@ -103,14 +103,20 @@ class Calibration:
         return rows
 
 
-def cmd_frame(args) -> None:
-    cache = Cache(args.run / "cache")
-    ci = int(round(args.time * cache.fps))
-    cap = cv2.VideoCapture(str(args.run / "clip.mp4"))
-    cap.set(cv2.CAP_PROP_POS_FRAMES, ci * cache_stride(args.run))
+def read_frame(run: Path, time_s: float) -> np.ndarray:
+    """Decode the video frame nearest to time_s in the run's clip."""
+    cache = Cache(run / "cache")
+    ci = int(round(time_s * cache.fps))
+    cap = cv2.VideoCapture(str(run / "clip.mp4"))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, ci * cache_stride(run))
     ok, img = cap.read()
     if not ok:
-        raise SystemExit("Could not read that frame.")
+        raise ValueError("Could not read that frame.")
+    return img
+
+
+def cmd_frame(args) -> None:
+    img = read_frame(args.run, args.time)
     for x in range(0, img.shape[1], 100):
         cv2.line(img, (x, 0), (x, img.shape[0]), (0, 255, 255), 1)
         cv2.putText(img, str(x), (x + 2, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
@@ -122,16 +128,16 @@ def cmd_frame(args) -> None:
     print(f"Wrote {dest} (local only, shows people). Read landmark pixel positions off the grid.")
 
 
-def cmd_apply(args) -> None:
-    anchors = json.loads(args.anchors.read_text())["anchors"]
-    cache = Cache(args.run / "cache")
+def apply_calibration(run: Path, anchors: list) -> dict:
+    """Convert tracklet foot positions to pitch meters, write the outputs, and return the report."""
+    cache = Cache(run / "cache")
     cal = Calibration(cache, anchors)
-    tr = pd.read_csv(args.run / "best_tracklets.csv.gz")
+    tr = pd.read_csv(run / "best_tracklets.csv.gz")
     foot_x, foot_y = ((tr.x1 + tr.x2) / 2).to_numpy(), tr.y2.to_numpy()
     xy, gap = cal.to_pitch(tr.ci.to_numpy(), foot_x, foot_y)
     out = tr[["pf", "ci", "track_id"]].copy()
     out["X_m"], out["Y_m"], out["anchor_gap_s"] = xy[:, 0].round(2), xy[:, 1].round(2), gap.round(1)
-    out.to_csv(args.run / "tracklet_pitch_xy.csv.gz", index=False)
+    out.to_csv(run / "tracklet_pitch_xy.csv.gz", index=False)
     report = {
         "anchors": len(anchors),
         "anchor_fit_rms_m": [round(r, 3) for r in cal.anchor_rms],
@@ -140,7 +146,13 @@ def cmd_apply(args) -> None:
         "rows_within_10s_of_anchor_pct": round(100 * float((gap <= 10).mean()), 1),
         "note": "Camera motion is modeled as a similarity, so error grows with the time from an anchor.",
     }
-    (args.run / "pitch_calibration_report.json").write_text(json.dumps(report, indent=2))
+    (run / "pitch_calibration_report.json").write_text(json.dumps(report, indent=2))
+    return report
+
+
+def cmd_apply(args) -> None:
+    anchors = json.loads(args.anchors.read_text())["anchors"]
+    report = apply_calibration(args.run, anchors)
     print(json.dumps(report, indent=2))
 
 
