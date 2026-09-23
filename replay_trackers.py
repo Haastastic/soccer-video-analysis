@@ -211,7 +211,7 @@ def run_config(cache: Cache, persons: pd.DataFrame, cfg: dict, fps_target: float
 WIDE_BEST = dict(track_high_thresh=0.7, new_track_thresh=0.7, buffer_s=30.0, match_thresh=0.95)
 
 
-def identity_truth(run, person_floor: float) -> pd.DataFrame | None:
+def identity_truth(run, person_floor: float, persons: pd.DataFrame) -> pd.DataFrame | None:
     """Person-detection rows with a known jersey, from the owner's jersey_label.py pass. None if there is none.
 
     Taken from best_tracklets.csv.gz + player_identity.csv and frozen to identity_rows.csv.gz on first use,
@@ -229,8 +229,17 @@ def identity_truth(run, person_floor: float) -> pd.DataFrame | None:
     if not (ident.exists() and tracks.exists()):
         return None
     ids = pd.read_csv(ident).dropna(subset=["jersey"])[["track_id", "jersey"]]
-    t = pd.read_csv(tracks, usecols=["track_id", "det_row"]).merge(ids, on="track_id")
+    t = pd.read_csv(tracks, usecols=["track_id", "ci", "det_row"]).merge(ids, on="track_id")
     t = t[t.det_row >= 0].rename(columns={"track_id": "src_track"})
+    # det_row indexes the person detections at the floor best_tracklets.csv.gz was built with. If that floor
+    # differs from this run's, the same index points at other detections: check before freezing wrong labels.
+    ok = (t.det_row < len(persons)) & (persons.ci.reindex(t.det_row).to_numpy() == t.ci.to_numpy())
+    if not ok.all():
+        raise SystemExit(
+            f"best_tracklets.csv.gz det_row values do not line up with --person-floor {person_floor} "
+            f"({(~ok).sum()} of {len(t)} rows point at a different frame). Use the floor it was built with."
+        )
+    t = t.drop(columns="ci")
     t["person_floor"] = person_floor
     t.to_csv(frozen, index=False)
     print(f"Froze {len(t)} identity-labeled detections ({t.jersey.nunique()} jerseys) to {frozen}")
@@ -354,7 +363,7 @@ def main() -> None:
     persons = cache.det[(cache.det.cls == PERSON) & (cache.det.conf >= args.person_floor)]
     persons = persons.reset_index(names="det_idx")  # det_idx: row in detections.csv.gz, for the ReID cache
     emb = load_reid(args.reid, persons) if args.reid else None
-    truth = identity_truth(args.run, args.person_floor)
+    truth = identity_truth(args.run, args.person_floor, persons)
     sweep_dir = args.run / "sweeps" / args.sweep if args.sweep else None
     if sweep_dir:
         # Config numbers restart at 0 on every run, and track_purity_label.py's hand labels refer to them, so a
