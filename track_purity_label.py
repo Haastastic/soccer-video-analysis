@@ -12,7 +12,7 @@ config). All configs are shuffled together and the config is never shown, so the
 
 Every crop starts as person A. When the box is on someone else in some crops, group them by person:
 
-  click            cycle that crop's person: A -> B -> C -> D -> A
+  click            cycle that crop's person: A -> B -> ... -> F -> A
   shift+click      a swap here: this crop and every later one move to the next person
   ctrl+click       "?" for that crop (cannot tell who it is), ctrl+click again to undo
   Enter            save the grouping: one person if every crop is A (or ?), else two or more
@@ -68,8 +68,11 @@ COLS = int(np.clip(screen_size()[0] // CROP_W, 4, N_CROPS // ROWS))
 PER_PAGE = COLS * ROWS
 TRUTH_COLS = ["item", "config", "track_id", "duration_s", "verdict", "grouped"]
 CROP_COLS = ["item", "config", "track_id", "crop", "ci", "det_row", "group"]
-GROUPS = "ABCD"
-GROUP_COLOR = {"A": (200, 200, 200), "B": (0, 140, 255), "C": (255, 0, 255), "D": (255, 255, 0), "?": (60, 60, 60)}
+GROUPS = "ABCDEF"
+GROUP_COLOR = {
+    "A": (200, 200, 200), "B": (0, 140, 255), "C": (255, 0, 255), "D": (255, 255, 0), "E": (0, 0, 255),
+    "F": (0, 255, 128), "?": (60, 60, 60),
+}  # fmt: skip
 
 
 def moving_tracks(tr: pd.DataFrame, cache: Cache, min_extent_h: float = 0.75) -> set:
@@ -178,6 +181,8 @@ def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, grou
     status = f" [{label}]" if label else ""
     counts = " ".join(f"{g}:{groups.count(g)}" for g in GROUPS + "?" if groups.count(g))
     pages = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
+    if GROUPS[-1] in groups:
+        counts += f" (max {len(GROUPS)} people: a further swap cannot get its own letter, press x instead)"
     text = (
         f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{pages}{zv.label()}   "
         "click cycle person | shift+click swap here | ctrl+click ? | Enter save | p one person | "
@@ -341,7 +346,14 @@ def group_metrics(run, sweep: str, d: pd.DataFrame, crops: pd.DataFrame | None, 
     """From grouped tracklets of one config: how much of the time is the main person, and where swaps happen."""
     is_grouped = d.grouped.fillna(False).astype(bool)
     g = d[(d.verdict == "mixed") & is_grouped]
-    out = dict(mixed_grouped=len(g), mixed_ungrouped=int(((d.verdict == "mixed") & ~is_grouped).sum()))
+    ungrouped = (d.verdict == "mixed") & ~is_grouped
+    out = dict(
+        mixed_grouped=len(g),
+        mixed_ungrouped=int(ungrouped.sum()),
+        # main_person_time_pct leaves these out (unknown split), and they are likely the worst ones: report
+        # their share of labeled time so the percentage is read with that in mind
+        mixed_ungrouped_time_pct=round(100 * float(d.duration_s[ungrouped].sum() / d.duration_s.sum()), 1),
+    )
     # one-person tracklets are 100% main person whether or not they went through grouping; ungrouped "two or
     # more" ones are left out of the time share, since how much of them is the main person is unknown
     shares = [(r.duration_s, 1.0) for r in d[d.verdict == "pure"].itertuples()]
