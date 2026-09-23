@@ -22,8 +22,8 @@ identity plan always called for:
   right click      pan the zoomed view to that spot
   r                reset zoom to 1x
 
-Zoom stays where you set it across players (the crop layout is the same for every player). The window keeps
-its size while zoomed, so nothing runs off the screen. Progress is saved after every player, so rerunning
+Zoom stays where you set it across players (the crop layout is the same for every player). The window grows
+with zoom up to the screen size, then magnifies inside it. Progress is saved after every player, so rerunning
 `label` resumes where you stopped. Labels go to OUT/jersey_truth.csv (git-ignored under data/). The crops show
 people: keep them local.
 

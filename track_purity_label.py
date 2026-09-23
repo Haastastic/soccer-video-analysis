@@ -18,7 +18,8 @@ config). All configs are shuffled together and the config is never shown, so the
   q                save and quit
   mouse wheel      zoom in or out, centered on the cursor
   right click      pan the zoomed view to that spot
-  r                reset zoom (zoom stays set across tracklets otherwise, since the crop grid is the same)
+  r                reset zoom (zoom stays set across tracklets otherwise, since the crop grid is the same). The
+                   window grows with zoom up to the screen size, then magnifies inside it
 
 Crops are in time order, left to right then top to bottom, with the time in seconds on each; the green box is
 the tracked person. A swap usually shows as a change of kit, build, or position in the group between two

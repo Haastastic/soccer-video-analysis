@@ -270,19 +270,34 @@ def track_metrics(tr: pd.DataFrame, fps: float, n_proc: int, cache: Cache, expec
 # ---------------------------------------------------------------- review UI zoom
 
 
+def screen_size() -> tuple:
+    """Usable display size in pixels for review windows (primary screen, minus room for title bar and taskbar)."""
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        w, h = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    except (AttributeError, OSError):
+        w, h = 1920, 1080
+    return max(640, w - 40), max(480, h - 140)
+
+
 class ZoomView:
     """Cursor-centered zoom for the OpenCV review tools. Every clip review tool should have one.
 
-    The window keeps its size: zooming crops into the content and scales that back up, so nothing runs off the
-    screen (growing the whole image did, past about 2x on a laptop). Mouse wheel zooms at the cursor, right click
-    pans to a spot, reset() goes back to the full view. Draw status and key text AFTER apply(), so it stays readable.
+    Zooming grows the window (owner preference) until it reaches the screen size, then keeps magnifying inside the
+    window, so nothing runs off the screen. Mouse wheel zooms at the cursor, right click pans to a spot, reset()
+    goes back to the full view at its original size. Draw status and key text AFTER apply(), so it stays readable.
     Tools that need their own left clicks call on_mouse() from their callback and map clicks with to_content().
+    reserve_h: pixels the caller adds above/below the zoomed content (header, footer), kept on screen too.
     """
 
     STEP = 1.25
     MAX = 8.0
 
-    def __init__(self):
+    def __init__(self, reserve_h: int = 24):
+        self.max_w, self.max_h = screen_size()
+        self.max_h -= reserve_h
         self.zoom = 1.0
         self.cx = self.cy = None  # view center in content pixels; None = content center
         self.view = (0.0, 0.0, 1.0, 1.0)  # x0, y0, w, h in content pixels, from the last apply()
@@ -309,8 +324,11 @@ class ZoomView:
 
     def apply(self, content: np.ndarray) -> np.ndarray:
         h, w = content.shape[:2]
-        self.out_size = (w, h)
-        vw, vh = w / self.zoom, h / self.zoom
+        # the window grows with zoom up to the screen; past that, the view crops in (and right click pans)
+        out_w = int(round(min(w * self.zoom, max(w, self.max_w))))
+        out_h = int(round(min(h * self.zoom, max(h, self.max_h))))
+        self.out_size = (out_w, out_h)
+        vw, vh = out_w / self.zoom, out_h / self.zoom
         cx = self.cx if self.cx is not None else w / 2
         cy = self.cy if self.cy is not None else h / 2
         x0 = float(np.clip(cx - vw / 2, 0, w - vw))
@@ -319,7 +337,7 @@ class ZoomView:
         if self.zoom == 1.0:
             return content.copy()
         crop = content[int(y0) : int(round(y0 + vh)), int(x0) : int(round(x0 + vw))]
-        return cv2.resize(crop, (w, h), interpolation=cv2.INTER_CUBIC)
+        return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
 
     def label(self) -> str:
         return f"  zoom {self.zoom:.1f}x" if self.zoom > 1.0 else ""

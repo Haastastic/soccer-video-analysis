@@ -10,7 +10,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Every stage writes its output to disk so any stage can be rerun and scored on its own.
 - Every stat carries a confidence value and a visibility percentage. Low-confidence events go to a review queue.
 - Be direct. Outline format with real detail. No filler.
-- Every clip review/labeling tool needs zoom (owner rule, 2026-09-23). OpenCV tools use sv_common.ZoomView: mouse wheel zooms at the cursor, right click pans, r resets, and the window keeps its size so nothing runs off the screen. ball_label.py (fixed 3x inset), event_label.py (own viewer) and pitch_anchor_ui.py (browser) already had zoom.
+- Every clip review/labeling tool needs zoom (owner rule, 2026-09-23). OpenCV tools use sv_common.ZoomView: mouse wheel zooms at the cursor, right click pans, r resets, and the window grows with zoom up to the screen size (owner preference), then magnifies inside it. ball_label.py (fixed 3x inset), event_label.py (own viewer) and pitch_anchor_ui.py (browser) already had zoom.
 
 ## Footage facts
 - 1080p, roughly 30 fps, elevated sideline auto-pan camera. Not a fixed wide shot. CORRECTED 2026-09-23 (owner): it does NOT follow the ball - earlier phases assumed it did and reasoned from that; those specific causal claims are wrong and are being corrected as they're found (see Phase 5 findings for one). What the pan actually follows or is driven by is not established; do not assume ball-following, and do not invent a replacement cause without asking.
