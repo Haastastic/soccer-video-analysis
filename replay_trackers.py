@@ -13,6 +13,7 @@ Example:
 import argparse
 import itertools
 import json
+import shutil
 import time
 
 import numpy as np
@@ -163,6 +164,16 @@ def run_config(cache: Cache, persons: pd.DataFrame, cfg: dict, fps_target: float
         raise SystemExit("A ReID config needs --reid (embeddings from reid_cache.py).")
     tracker = build_tracker(cfg)
     use_feats = bool(cfg.get("reid"))
+    if use_feats:
+        # Embeddings are cached for one replay rate and person floor. A mismatch would silently leave most
+        # detections without a feature (never matched by appearance, never vetoed) and look like "ReID didn't help".
+        rows = persons.ci.isin(idxs).to_numpy()
+        coverage = float(np.any(emb[rows] != 0, axis=1).mean()) if rows.any() else 0.0
+        if coverage < 0.95:
+            raise SystemExit(
+                f"Only {coverage:.0%} of detections at {fps:.1f} fps have a cached embedding. Build them with "
+                "reid_cache.py at this --fps and --person-floor, or pass a matching --fps-list."
+            )
     by_ci = {ci: g for ci, g in persons.groupby("ci")}
     dummy = np.zeros((2, 2, 3), dtype=np.uint8)
     out = []
@@ -330,6 +341,9 @@ def main() -> None:
         help="name: write results and every config's tracks to RUN/sweeps/NAME/ and leave best_tracklets.csv.gz, "
         "best_config.json and everything downstream untouched",
     )
+    ap.add_argument(
+        "--overwrite", action="store_true", help="replace an existing --sweep folder (and any purity labels in it)"
+    )
     args = ap.parse_args()
 
     cache = Cache(args.run / "cache")
@@ -339,6 +353,12 @@ def main() -> None:
     truth = identity_truth(args.run, args.person_floor)
     sweep_dir = args.run / "sweeps" / args.sweep if args.sweep else None
     if sweep_dir:
+        # Config numbers restart at 0 on every run, and track_purity_label.py's hand labels refer to them, so a
+        # rerun with a different grid must not silently renumber configs under existing labels.
+        if sweep_dir.exists() and any(sweep_dir.iterdir()):
+            if not args.overwrite:
+                raise SystemExit(f"{sweep_dir} already exists. Pick another --sweep name or pass --overwrite.")
+            shutil.rmtree(sweep_dir)
         sweep_dir.mkdir(parents=True, exist_ok=True)
     print(
         f"Cache: {cache.n} frames at {cache.fps:.1f} fps, {len(persons)} person detections, "

@@ -70,7 +70,8 @@ def sample_items(run, sweep: str, configs: list, n: int, min_s: float, seed: int
     items = []
     for c in configs:
         tr = pd.read_csv(run / "sweeps" / sweep / f"tracks_{c}.csv.gz")
-        fps = json.loads((run / "sweeps" / sweep / f"config_{c}.json").read_text())["fps"]
+        params = json.loads((run / "sweeps" / sweep / f"config_{c}.json").read_text())
+        fps = params["fps"]
         g = tr.groupby("track_id").pf
         dur = (g.max() - g.min() + 1) / fps
         ok = dur[(dur >= min_s) & dur.index.isin(moving_tracks(tr, cache))]
@@ -83,7 +84,9 @@ def sample_items(run, sweep: str, configs: list, n: int, min_s: float, seed: int
             d = tr[tr.track_id == tid].sort_values("ci").reset_index(drop=True)
             idx = np.linspace(0, len(d) - 1, min(PER_PAGE * PAGES, len(d))).round().astype(int)
             rows = d.iloc[idx][["ci", "x1", "y1", "x2", "y2"]].to_dict("records")
-            items.append(dict(config=int(c), track_id=int(tid), duration_s=round(float(ok[tid]), 1), rows=rows))
+            items.append(
+                dict(config=int(c), params=params, track_id=int(tid), duration_s=round(float(ok[tid]), 1), rows=rows)
+            )
     rng.shuffle(items)
     for i, it in enumerate(items):
         it["item"] = i
@@ -130,11 +133,25 @@ def render(tiles, item, index, total, label, zoom, page, fps_cache) -> np.ndarra
     return show
 
 
+def check_configs(run, sweep: str, items: list) -> None:
+    """Exit if a config number now means different settings than when the sample was drawn (sweep was rerun)."""
+    for c in sorted({it["config"] for it in items}):
+        path = run / "sweeps" / sweep / f"config_{c}.json"
+        now = json.loads(path.read_text()) if path.exists() else None
+        then = next(it.get("params") for it in items if it["config"] == c)
+        if then is None or now != then:
+            raise SystemExit(
+                f"Config {c} in {sweep} no longer matches the sampled tracklets (sweep rerun or old sample). "
+                "Delete purity_items.json and purity_truth.csv to start over."
+            )
+
+
 def cmd_label(args) -> None:
     sdir = args.run / "sweeps" / args.sweep
     items_path, truth_path = sdir / "purity_items.json", sdir / "purity_truth.csv"
     if items_path.exists():
         items = json.loads(items_path.read_text())
+        check_configs(args.run, args.sweep, items)
         print(f"Resuming the saved sample in {items_path} (delete it to draw a new one).")
     else:
         configs = [int(c) for c in args.configs.split(",")]
@@ -213,6 +230,7 @@ def wilson(k: int, n: int, z: float = 1.96) -> list:
 
 def cmd_score(args) -> None:
     sdir = args.run / "sweeps" / args.sweep
+    check_configs(args.run, args.sweep, json.loads((sdir / "purity_items.json").read_text()))
     t = pd.read_csv(sdir / "purity_truth.csv")
     res = pd.read_csv(sdir / "results.csv").set_index("config") if (sdir / "results.csv").exists() else None
     out = {}
