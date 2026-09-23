@@ -18,12 +18,14 @@ identity plan always called for:
   b                back one player (undo the last label)
   q                save and quit
 
-  mouse wheel      zoom in or out on the crops - useful when a player is small in the frame
+  mouse wheel      zoom in or out, centered on the cursor - point at a jersey back to read the number
+  right click      pan the zoomed view to that spot
   r                reset zoom to 1x
 
-Zoom stays where you set it across players (there is nothing to click here, unlike event_label.py, so there is
-no coordinate mapping to reset). Progress is saved after every player, so rerunning `label` resumes where you
-stopped. Labels go to OUT/jersey_truth.csv (git-ignored under data/). The crops show people: keep them local.
+Zoom stays where you set it across players (the crop layout is the same for every player). The window keeps
+its size while zoomed, so nothing runs off the screen. Progress is saved after every player, so rerunning
+`label` resumes where you stopped. Labels go to OUT/jersey_truth.csv (git-ignored under data/). The crops show
+people: keep them local.
 
 `apply` joins the labels with tracklet_stitch.csv and roster.csv into OUT/player_identity.csv (one row per
 original track_id) and reports roster coverage plus these worth a second look: the same jersey given to two
@@ -49,7 +51,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import cache_stride, read_frames, require_under_data
+from sv_common import ZoomView, cache_stride, read_frames, require_under_data
 
 WINDOW = "jersey label"
 ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
@@ -134,12 +136,8 @@ class Session:
         return pd.DataFrame(rows, columns=TRUTH_COLS)
 
 
-ZOOM_STEP = 1.25
-MIN_ZOOM, MAX_ZOOM = 1.0, 4.0
-
-
 def render(
-    imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str, zoom: float, page: int
+    imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str, zv: ZoomView, page: int
 ) -> np.ndarray:
     n_pages = max(1, -(-len(item["rows"]) // PER_PLAYER))  # ceil division
     page_rows = item["rows"][page * PER_PLAYER : (page + 1) * PER_PLAYER]
@@ -159,17 +157,15 @@ def render(
         cv2.rectangle(crop, (bx1, by1), (bx2, by2), (0, 255, 0), 2)
         tiles.append(crop)
     tiles += [np.zeros((CROP_H, CROP_W, 3), np.uint8)] * (PER_PLAYER - len(tiles))
-    show = np.hstack(tiles)
-    if zoom != 1.0:
-        show = cv2.resize(show, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC if zoom > 1 else cv2.INTER_AREA)
+    show = zv.apply(np.hstack(tiles))
     sh, sw = show.shape[:2]
     status = f" [{label['verdict']}{' #' + str(label['jersey']) if label.get('jersey') else ''}]" if label else ""
     typed_txt = f"  typing: {typed}" if typed else ""
-    zoom_txt = f"  zoom {zoom:.1f}x" if zoom != 1.0 else ""
+    zoom_txt = zv.label()
     page_txt = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
     keys = (
         "digits+Enter=jersey | n not on roster | x mixed (2 people) | o bench/sub (bib) | s skip | "
-        "m more crops | b back | wheel zoom | r reset | q quit"
+        "m more crops | b back | wheel zoom | right-click pan | r reset | q quit"
     )
     header = f"{index + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
     text = f"{header}{status}{typed_txt}{zoom_txt}{page_txt}   {keys}"
@@ -194,14 +190,8 @@ def cmd_label(args) -> None:
     for clip_frame, img in read_frames(run / "clip.mp4", list(needed)):
         jpgs[clip_frame // stride] = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])[1]
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
-    zoom = [1.0]  # a zoom level the owner sets once and keeps across players - no click coordinates depend on it
-
-    def on_mouse(event, _mx, _my, flags, _param):
-        if event == cv2.EVENT_MOUSEWHEEL:
-            factor = ZOOM_STEP if flags > 0 else 1 / ZOOM_STEP
-            zoom[0] = float(np.clip(zoom[0] * factor, MIN_ZOOM, MAX_ZOOM))
-
-    cv2.setMouseCallback(WINDOW, on_mouse)
+    zv = ZoomView()  # the owner sets it once and keeps it across players
+    cv2.setMouseCallback(WINDOW, zv.on_mouse)
     typed = ""
     page = 0
     try:
@@ -212,7 +202,7 @@ def cmd_label(args) -> None:
                 row["ci"]: cv2.imdecode(jpgs[row["ci"]], cv2.IMREAD_COLOR) for row in item["rows"] if row["ci"] in jpgs
             }
             label = session.labels.get(session.idx)
-            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), label, typed, zoom[0], page))
+            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), label, typed, zv, page))
             key = cv2.waitKey(30) & 0xFF
             changed, moved = False, False
             if ord("0") <= key <= ord("9"):
@@ -224,7 +214,7 @@ def cmd_label(args) -> None:
             elif key == 8:  # Backspace
                 typed = typed[:-1]
             elif key == ord("r"):
-                zoom[0] = 1.0
+                zv.reset()
             elif key == ord("m"):
                 page = (page + 1) % n_pages
             elif key == ord("n"):

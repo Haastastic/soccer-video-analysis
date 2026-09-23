@@ -7,6 +7,8 @@ confidence and flags overlaid. One key per tracklet:
   t   target        o   opponent        f   official        g   goalkeeper        x   other (not a player)
   s   skip, unsure                b   back one tracklet, to undo                q   save and quit
 
+  mouse wheel  zoom in or out on the crops, centered on the cursor    right click  pan    r  reset zoom
+
 Progress is saved after every tracklet, so rerunning `label` resumes. Labels go to OUT/role_truth.csv
 (git-ignored under data/). Crops show people: keep them local.
 
@@ -30,12 +32,13 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import cache_stride, read_frames, require_under_data, sample_rows
+from sv_common import ZoomView, cache_stride, read_frames, require_under_data, sample_rows
 from team_classify import ROLES
 
 WINDOW = "role label"
 MIN_SAMPLE_ROWS = 10  # tracklets shorter than this rarely give a clear crop
 CROP_H = 220
+HEADER_H, FOOTER_H = 22, 22
 TRUTH_COLS = ["track_id", "pred_role", "pred_confidence", "player_candidate", "n_rows", "truth_role", "verdict"]
 KEY_ROLE = {ord("t"): "target", ord("o"): "opponent", ord("f"): "official", ord("g"): "goalkeeper", ord("x"): "other"}
 
@@ -132,7 +135,7 @@ class Session:
         return pd.DataFrame(rows, columns=TRUTH_COLS)
 
 
-def render(img_lookup: dict, item: dict, index: int, total: int, label: dict | None) -> np.ndarray:
+def render(img_lookup: dict, item: dict, index: int, total: int, label: dict | None, zv: ZoomView) -> np.ndarray:
     tiles = []
     for ci, x1, y1, x2, y2 in item["crops"]:
         img = img_lookup.get(ci)
@@ -155,14 +158,17 @@ def render(img_lookup: dict, item: dict, index: int, total: int, label: dict | N
     for t in tiles:
         strip[:, x : x + t.shape[1]] = t
         x += t.shape[1] + gap
-    header_h, footer_h = 22, 22
-    canvas = np.zeros((header_h + CROP_H + footer_h, strip.shape[1], 3), np.uint8)
-    canvas[header_h : header_h + CROP_H] = strip
+    canvas = np.zeros((HEADER_H + CROP_H + FOOTER_H, strip.shape[1], 3), np.uint8)
+    canvas[HEADER_H : HEADER_H + CROP_H] = zv.apply(strip)
     status = f"  [{label['verdict']}: {label['truth_role']}]" if label else ""
     flags = f"candidate={item['player_candidate']} sideline={item['sideline_suspect']} rows={item['n_rows']}"
-    header = f"{index + 1}/{total}  pred={item['pred_role']} ({item['pred_confidence']:.2f})  {flags}{status}"
+    header = (
+        f"{index + 1}/{total}  pred={item['pred_role']} ({item['pred_confidence']:.2f})  {flags}{status}{zv.label()}"
+    )
     cv2.putText(canvas, header, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-    keys = "y accept | t target | o opponent | f official | g goalkeeper | x other | s skip | b back | q quit"
+    keys = (
+        "y accept | t target | o opponent | f official | g goalkeeper | x other | s skip | b back | q quit | wheel zoom"
+    )
     cv2.putText(canvas, keys, (6, canvas.shape[0] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
     return canvas
 
@@ -197,11 +203,13 @@ def cmd_label(args) -> None:
         jpgs[clip_frame // stride] = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])[1]
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
+    zv = ZoomView()  # zooms the crop strip only; the header row sits above it, so shift mouse y to strip pixels
+    cv2.setMouseCallback(WINDOW, lambda event, mx, my, flags, _p: zv.on_mouse(event, mx, my - HEADER_H, flags))
     try:
         while not session.done:
             item = session.items[session.idx]
             lookup = {ci: cv2.imdecode(jpgs[ci], cv2.IMREAD_COLOR) for ci, *_ in item["crops"] if ci in jpgs}
-            cv2.imshow(WINDOW, render(lookup, item, session.idx, len(items), session.labels.get(session.idx)))
+            cv2.imshow(WINDOW, render(lookup, item, session.idx, len(items), session.labels.get(session.idx), zv))
             key = cv2.waitKey(30) & 0xFF
             changed = False
             if key == ord("y"):
@@ -215,9 +223,12 @@ def cmd_label(args) -> None:
             elif key == ord("b"):
                 session.back()
                 changed = True
+            elif key == ord("r"):
+                zv.reset()
             elif key == ord("q"):
                 break
             if changed:
+                zv.reset()  # strips differ in width per tracklet, so a zoom position does not carry over
                 save_labels(truth_path, items, session, saved)
     finally:
         cv2.destroyAllWindows()

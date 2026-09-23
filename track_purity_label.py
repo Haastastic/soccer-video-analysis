@@ -16,7 +16,9 @@ config). All configs are shuffled together and the config is never shown, so the
   m                more crops: page through further sampled frames of the same tracklet
   b                back one tracklet (undo the last label)
   q                save and quit
-  mouse wheel      zoom, r resets
+  mouse wheel      zoom in or out, centered on the cursor
+  right click      pan the zoomed view to that spot
+  r                reset zoom (zoom stays set across tracklets otherwise, since the crop grid is the same)
 
 Crops are in time order, left to right then top to bottom, with the time in seconds on each; the green box is
 the tracked person. A swap usually shows as a change of kit, build, or position in the group between two
@@ -41,7 +43,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, cache_stride, read_frames, require_under_data
+from sv_common import Cache, ZoomView, cache_stride, read_frames, require_under_data
 
 WINDOW = "track purity"
 CROP_W, CROP_H = 220, 320
@@ -49,7 +51,6 @@ COLS, ROWS = 4, 2
 PER_PAGE = COLS * ROWS
 PAGES = 4
 TRUTH_COLS = ["item", "config", "track_id", "duration_s", "verdict"]
-ZOOM_STEP, MIN_ZOOM, MAX_ZOOM = 1.25, 0.5, 3.0
 
 
 def moving_tracks(tr: pd.DataFrame, cache: Cache, min_extent_h: float = 0.75) -> set:
@@ -104,7 +105,7 @@ def crop(img, row) -> np.ndarray:
     return out
 
 
-def render(tiles, item, index, total, label, zoom, page, fps_cache) -> np.ndarray:
+def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache) -> np.ndarray:
     rows = item["rows"]
     n_pages = max(1, -(-len(rows) // PER_PAGE))
     page_rows = list(range(page * PER_PAGE, min((page + 1) * PER_PAGE, len(rows))))
@@ -119,14 +120,12 @@ def render(tiles, item, index, total, label, zoom, page, fps_cache) -> np.ndarra
             cells.append(t)
         else:
             cells.append(blank)
-    show = np.vstack([np.hstack(cells[r * COLS : (r + 1) * COLS]) for r in range(ROWS)])
-    if zoom != 1.0:
-        show = cv2.resize(show, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC if zoom > 1 else cv2.INTER_AREA)
+    show = zv.apply(np.vstack([np.hstack(cells[r * COLS : (r + 1) * COLS]) for r in range(ROWS)]))
     sh, sw = show.shape[:2]
     status = f" [{label}]" if label else ""
     text = (
-        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  page {page + 1}/{n_pages}   "
-        "p one person | x two+ people | s skip | m more | b back | wheel zoom | q quit"
+        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  page {page + 1}/{n_pages}{zv.label()}   "
+        "p one person | x two+ people | s skip | m more | b back | wheel zoom | right-click pan | r reset | q quit"
     )
     cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
     cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
@@ -184,20 +183,15 @@ def cmd_label(args) -> None:
         tiles[i] = [t if t is not None else np.zeros((CROP_H, CROP_W, 3), np.uint8) for t in tiles[i]]
 
     idx = next((i for i in range(len(items)) if i not in labels), len(items))
-    zoom, page = [1.0], 0
-
-    def on_mouse(event, _x, _y, flags, _p):
-        if event == cv2.EVENT_MOUSEWHEEL:
-            zoom[0] = float(np.clip(zoom[0] * (ZOOM_STEP if flags > 0 else 1 / ZOOM_STEP), MIN_ZOOM, MAX_ZOOM))
-
+    zv, page = ZoomView(), 0
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(WINDOW, on_mouse)
+    cv2.setMouseCallback(WINDOW, zv.on_mouse)
     verdicts = {ord("p"): "pure", ord("x"): "mixed", ord("s"): "skipped"}
     try:
         while idx < len(items):
             item = items[idx]
             n_pages = max(1, -(-len(item["rows"]) // PER_PAGE))
-            cv2.imshow(WINDOW, render(tiles[idx], item, idx, len(items), labels.get(idx), zoom[0], page, fps_cache))
+            cv2.imshow(WINDOW, render(tiles[idx], item, idx, len(items), labels.get(idx), zv, page, fps_cache))
             key = cv2.waitKey(30) & 0xFF
             if key in verdicts:
                 labels[idx] = verdicts[key]
@@ -210,7 +204,7 @@ def cmd_label(args) -> None:
                 labels.pop(idx, None)
                 save()
             elif key == ord("r"):
-                zoom[0] = 1.0
+                zv.reset()
             elif key == ord("q"):
                 break
     finally:
