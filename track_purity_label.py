@@ -163,7 +163,7 @@ def toggle_unknown(groups: list, j: int) -> None:
     groups[j] = groups[j].upper() if groups[j].islower() else groups[j].lower()
 
 
-def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, groups) -> np.ndarray:
+def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, groups, note="") -> np.ndarray:
     rows = item["rows"]
     n_pages = max(1, -(-len(rows) // PER_PAGE))
     page_rows = list(range(page * PER_PAGE, min((page + 1) * PER_PAGE, len(rows))))
@@ -190,7 +190,7 @@ def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, grou
     if GROUPS[-1] in groups:
         counts += f" (max {len(GROUPS)} people: a further swap cannot get its own letter, press x instead)"
     text = (
-        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{pages}{zv.label()}   "
+        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{pages}{zv.label()}{note}   "
         "click cycle person | shift+click swap here | ctrl+click ? | Enter save | p one person | "
         "x two+ ungrouped | s skip | b back | wheel zoom | right-click pan | r reset | q quit"
     )
@@ -237,7 +237,7 @@ def cmd_label(args) -> None:
                 grouped[int(r.item)] = bool(r.grouped)
     if crops_path.exists():
         for i, d in pd.read_csv(crops_path).groupby("item"):
-            groups[int(i)] = [g.lower() if g == "?" else g for g in d.sort_values("crop").group]  # prior letter lost
+            groups[int(i)] = ["a" if g == "?" else g for g in d.sort_values("crop").group]  # prior letter lost
 
     def save():
         rows = [
@@ -304,6 +304,7 @@ def cmd_label(args) -> None:
             groups[i] = ["A"] * len(items[i]["rows"])
         save()
         history.append((state["pos"], *before))
+        state["confirm"] = None
         state["pos"], state["page"] = state["pos"] + 1, 0
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
@@ -313,13 +314,22 @@ def cmd_label(args) -> None:
             i = todo[state["pos"]]
             item, g, page = items[i], cur_groups(), state["page"]
             n_pages = max(1, -(-len(item["rows"]) // PER_PAGE))
-            show = render(tiles[i], item, state["pos"], len(todo), labels.get(i), zv, page, fps_cache, g)
+            # re-queued: marked "two or more" in an earlier session, before grouping existed
+            requeued = labels.get(i) == "mixed" and i not in grouped
+            note = ""
+            if state.get("confirm") == i:
+                note = "  EARLIER YOU MARKED THIS TWO+. Enter again = one person after all"
+            elif requeued:
+                note = "  (earlier: two+, please group it; s keeps it as two+ ungrouped)"
+            show = render(tiles[i], item, state["pos"], len(todo), labels.get(i), zv, page, fps_cache, g, note)
             cv2.imshow(WINDOW, show)
             key = cv2.waitKey(30) & 0xFF
             if key in (13, 10):  # Enter: save the grouping
                 people = {x for x in g if x in GROUPS}
-                if not people:  # every crop unknown: nothing was established, so it is not "one person"
-                    finish(i, "skipped", False)
+                if requeued and len(people) <= 1 and state.get("confirm") != i:
+                    state["confirm"] = i  # a reflexive Enter must not overturn an earlier "two or more"
+                elif not people:  # every crop unknown: nothing established; keep an earlier two+ verdict
+                    finish(i, "mixed" if requeued else "skipped", False)
                 else:
                     finish(i, "pure" if len(people) == 1 else "mixed", True)
             elif key == ord("p"):
@@ -327,7 +337,7 @@ def cmd_label(args) -> None:
             elif key == ord("x"):
                 finish(i, "mixed", False)
             elif key == ord("s"):
-                finish(i, "skipped", False)
+                finish(i, "mixed" if requeued else "skipped", False)  # s never drops an earlier two+ verdict
             elif key == ord("m"):
                 state["page"] = (page + 1) % n_pages
             elif key == ord("b") and history:
