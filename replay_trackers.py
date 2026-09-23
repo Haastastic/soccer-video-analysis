@@ -125,6 +125,10 @@ def build_tracker(cfg: dict):
     reid = bool(cfg.pop("reid", False))
     veto = cfg.pop("reid_veto", None)
     refind_only = bool(cfg.pop("refind_only", False))
+    if reid and cfg["tracker_type"] != "botsort":
+        raise SystemExit(
+            "ReID and veto configs need BoT-SORT; ByteTrack has no appearance term. Use --trackers botsort."
+        )
     if reid:
         cfg.update(with_reid=True, model="auto")  # "auto": features come precomputed from reid_cache.py
     args = SimpleNamespace(**{**DEFAULTS, **cfg})
