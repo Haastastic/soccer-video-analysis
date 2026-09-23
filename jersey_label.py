@@ -8,7 +8,8 @@ the "manual anchors" the project's roster-based identity plan always called for:
   0-9 then Enter   type the jersey number, Enter to confirm (checked against roster.csv)
   Backspace        remove the last typed digit
   n                confident this is NOT a roster player (e.g. a misclassified opponent)
-  s                skip, unsure
+  s                skip, unsure - you do not have to read a printed number, recognizing the player is enough
+  m                more crops: page through further sampled frames for this same player
   b                back one player (undo the last label)
   q                save and quit
 
@@ -43,12 +44,15 @@ WINDOW = "jersey label"
 ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
 ROSTER_ROLES = ("target", "goalkeeper")  # roster.csv is one team; opponents are never matched against it
 CROP_W, CROP_H = 220, 320
-PER_PLAYER = 4
+PER_PLAYER = 4  # crops shown at once
+PAGES = 4  # "more" (m) cycles through this many pages, so up to PER_PLAYER*PAGES distinct sampled frames
 TRUTH_COLS = ["player_id", "jersey", "verdict"]
 
 
 def build_items(run: Path) -> list:
-    """One item per stitched target/goalkeeper player, with up to PER_PLAYER sample rows spread over its life."""
+    """One item per stitched target/goalkeeper player, with up to PER_PLAYER*PAGES sample rows spread over its
+    life - shown PER_PLAYER at a time, "more" (m) pages through the rest, for when a jersey number or a clear
+    look at the player isn't visible in the first batch."""
     stitch = pd.read_csv(run / "tracklet_stitch.csv")
     stitch = stitch[stitch.role.isin(ROSTER_ROLES)]
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
@@ -56,7 +60,8 @@ def build_items(run: Path) -> list:
     items = []
     for pid, d in tr.groupby("player_id"):
         d = d.reset_index(drop=True)
-        idx = np.linspace(0, len(d) - 1, min(PER_PLAYER, len(d))).round().astype(int)
+        n = min(PER_PLAYER * PAGES, len(d))
+        idx = np.linspace(0, len(d) - 1, n).round().astype(int)
         rows = d.iloc[idx][["ci", "track_id", "x1", "y1", "x2", "y2"]].to_dict("records")
         items.append(dict(player_id=pid, role=d.role.iloc[0], n_tracklets=d.track_id.nunique(), rows=rows))
     items.sort(key=lambda it: it["player_id"])
@@ -113,9 +118,13 @@ ZOOM_STEP = 1.25
 MIN_ZOOM, MAX_ZOOM = 1.0, 4.0
 
 
-def render(imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str, zoom: float) -> np.ndarray:
+def render(
+    imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str, zoom: float, page: int
+) -> np.ndarray:
+    n_pages = max(1, -(-len(item["rows"]) // PER_PLAYER))  # ceil division
+    page_rows = item["rows"][page * PER_PLAYER : (page + 1) * PER_PLAYER]
     tiles = []
-    for row in item["rows"]:
+    for row in page_rows:
         img = imgs.get(row["ci"])
         if img is None:
             tiles.append(np.zeros((CROP_H, CROP_W, 3), np.uint8))
@@ -137,9 +146,10 @@ def render(imgs: dict, item: dict, index: int, total: int, label: dict | None, t
     status = f" [{label['verdict']}{' #' + str(label['jersey']) if label.get('jersey') else ''}]" if label else ""
     typed_txt = f"  typing: {typed}" if typed else ""
     zoom_txt = f"  zoom {zoom:.1f}x" if zoom != 1.0 else ""
-    keys = "digits+Enter=jersey | n not on roster | s skip | b back | wheel zoom | r reset | q quit"
+    page_txt = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
+    keys = "digits+Enter=jersey | n not on roster | s skip | m more crops | b back | wheel zoom | r reset | q quit"
     header = f"{index + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
-    text = f"{header}{status}{typed_txt}{zoom_txt}   {keys}"
+    text = f"{header}{status}{typed_txt}{zoom_txt}{page_txt}   {keys}"
     cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
     cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     return show
@@ -170,37 +180,43 @@ def cmd_label(args) -> None:
 
     cv2.setMouseCallback(WINDOW, on_mouse)
     typed = ""
+    page = 0
     try:
         while not session.done:
             item = session.items[session.idx]
+            n_pages = max(1, -(-len(item["rows"]) // PER_PLAYER))
             imgs = {
                 row["ci"]: cv2.imdecode(jpgs[row["ci"]], cv2.IMREAD_COLOR) for row in item["rows"] if row["ci"] in jpgs
             }
             label = session.labels.get(session.idx)
-            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), label, typed, zoom[0]))
+            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), label, typed, zoom[0], page))
             key = cv2.waitKey(30) & 0xFF
-            changed = False
+            changed, moved = False, False
             if ord("0") <= key <= ord("9"):
                 typed += chr(key)
             elif key in (13, 10):  # Enter
                 if typed and session.confirm(int(typed)):
-                    changed = True
+                    changed = moved = True
                 typed = ""
             elif key == 8:  # Backspace
                 typed = typed[:-1]
             elif key == ord("r"):
                 zoom[0] = 1.0
+            elif key == ord("m"):
+                page = (page + 1) % n_pages
             elif key == ord("n"):
                 session.not_on_roster()
-                typed, changed = "", True
+                typed, changed, moved = "", True, True
             elif key == ord("s"):
                 session.skip()
-                typed, changed = "", True
+                typed, changed, moved = "", True, True
             elif key == ord("b"):
                 session.back()
-                typed = ""
+                typed, moved = "", True
             elif key == ord("q"):
                 break
+            if moved:
+                page = 0
             if changed:
                 session.table().to_csv(truth_path, index=False)
     finally:
