@@ -142,20 +142,25 @@ def add_det_rows(run, sweep: str, items: list) -> bool:
 
 def switch_to_next(groups: list, j: int) -> None:
     """A swap at crop j: j and every later crop move to the person after j's (unknown crops stay unknown)."""
-    base = groups[j] if groups[j] in GROUPS else "A"
-    nxt = GROUPS[min(GROUPS.index(base) + 1, len(GROUPS) - 1)]
+    nxt = GROUPS[min(GROUPS.index(groups[j].upper()) + 1, len(GROUPS) - 1)]
     for k in range(j, len(groups)):
-        if groups[k] != "?":
+        if groups[k] in GROUPS:
             groups[k] = nxt
+
+
+# An unknown crop is stored as the lowercase of its letter, so un-marking it restores the letter it had.
+# It is shown and saved as "?".
+def shown(g: str) -> str:
+    return "?" if g.islower() else g
 
 
 def cycle(groups: list, j: int) -> None:
     g = groups[j]
-    groups[j] = GROUPS[(GROUPS.index(g) + 1) % len(GROUPS)] if g in GROUPS else "A"
+    groups[j] = g.upper() if g.islower() else GROUPS[(GROUPS.index(g) + 1) % len(GROUPS)]
 
 
 def toggle_unknown(groups: list, j: int) -> None:
-    groups[j] = "A" if groups[j] == "?" else "?"
+    groups[j] = groups[j].upper() if groups[j].islower() else groups[j].lower()
 
 
 def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, groups) -> np.ndarray:
@@ -170,16 +175,17 @@ def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, grou
             t = tiles[j].copy()
             txt = f"{(rows[j]['ci'] - rows[0]['ci']) / fps_cache:.1f}s"
             cv2.putText(t, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-            color = GROUP_COLOR[groups[j]]
+            color = GROUP_COLOR[shown(groups[j])]
             cv2.rectangle(t, (0, 0), (CROP_W - 1, CROP_H - 1), color, 4)
-            cv2.putText(t, groups[j], (CROP_W - 34, 34), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3, cv2.LINE_AA)
+            cv2.putText(t, shown(groups[j]), (CROP_W - 34, 34), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3, cv2.LINE_AA)
             cells.append(t)
         else:
             cells.append(blank)
     show = zv.apply(np.vstack([np.hstack(cells[r * COLS : (r + 1) * COLS]) for r in range(ROWS)]))
     sh, sw = show.shape[:2]
     status = f" [{label}]" if label else ""
-    counts = " ".join(f"{g}:{groups.count(g)}" for g in GROUPS + "?" if groups.count(g))
+    visible = [shown(g) for g in groups]
+    counts = " ".join(f"{g}:{visible.count(g)}" for g in GROUPS + "?" if visible.count(g))
     pages = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
     if GROUPS[-1] in groups:
         counts += f" (max {len(GROUPS)} people: a further swap cannot get its own letter, press x instead)"
@@ -231,7 +237,7 @@ def cmd_label(args) -> None:
                 grouped[int(r.item)] = bool(r.grouped)
     if crops_path.exists():
         for i, d in pd.read_csv(crops_path).groupby("item"):
-            groups[int(i)] = d.sort_values("crop").group.tolist()
+            groups[int(i)] = [g.lower() if g == "?" else g for g in d.sort_values("crop").group]  # prior letter lost
 
     def save():
         rows = [
@@ -242,7 +248,7 @@ def cmd_label(args) -> None:
         pd.DataFrame(rows, columns=TRUTH_COLS).to_csv(truth_path, index=False)
         crows = [
             dict(item=i, config=items[i]["config"], track_id=items[i]["track_id"], crop=j,
-                 ci=items[i]["rows"][j]["ci"], det_row=items[i]["rows"][j]["det_row"], group=g)
+                 ci=items[i]["rows"][j]["ci"], det_row=items[i]["rows"][j]["det_row"], group=shown(g))
             for i in sorted(groups) if grouped.get(i) and i in labels for j, g in enumerate(groups[i])
         ]  # fmt: skip
         pd.DataFrame(crows, columns=CROP_COLS).to_csv(crops_path, index=False)
@@ -266,7 +272,7 @@ def cmd_label(args) -> None:
     todo += [i for i in range(len(items)) if labels.get(i) == "mixed" and i not in grouped]
     zv = ZoomView()
     state = dict(pos=0, page=0)
-    history = []  # positions in todo, for b
+    history = []  # (position in todo, previous label, previous grouped flag, previous groups), for b
 
     def cur_groups():
         i = todo[state["pos"]]
@@ -290,10 +296,14 @@ def cmd_label(args) -> None:
         else:
             cycle(g, j)
 
-    def finish(i, verdict, is_grouped):
+    def finish(i, verdict, is_grouped, reset=False):
+        # an item re-queued from an earlier session already has a verdict: b must restore it, not erase it
+        before = (labels.get(i), grouped.get(i), list(groups[i]) if i in groups else None)
         labels[i], grouped[i] = verdict, is_grouped
+        if reset:
+            groups[i] = ["A"] * len(items[i]["rows"])
         save()
-        history.append(state["pos"])
+        history.append((state["pos"], *before))
         state["pos"], state["page"] = state["pos"] + 1, 0
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
@@ -307,10 +317,13 @@ def cmd_label(args) -> None:
             cv2.imshow(WINDOW, show)
             key = cv2.waitKey(30) & 0xFF
             if key in (13, 10):  # Enter: save the grouping
-                finish(i, "pure" if len({x for x in g if x in GROUPS}) <= 1 else "mixed", True)
+                people = {x for x in g if x in GROUPS}
+                if not people:  # every crop unknown: nothing was established, so it is not "one person"
+                    finish(i, "skipped", False)
+                else:
+                    finish(i, "pure" if len(people) == 1 else "mixed", True)
             elif key == ord("p"):
-                groups[i] = ["A"] * len(item["rows"])
-                finish(i, "pure", True)
+                finish(i, "pure", True, reset=True)
             elif key == ord("x"):
                 finish(i, "mixed", False)
             elif key == ord("s"):
@@ -318,10 +331,14 @@ def cmd_label(args) -> None:
             elif key == ord("m"):
                 state["page"] = (page + 1) % n_pages
             elif key == ord("b") and history:
-                state["pos"], state["page"] = history.pop(), 0
-                j = todo[state["pos"]]
-                labels.pop(j, None)
-                grouped.pop(j, None)
+                pos, prev_label, prev_grouped, prev_groups = history.pop()
+                state["pos"], state["page"] = pos, 0
+                j = todo[pos]
+                for store, prev in ((labels, prev_label), (grouped, prev_grouped), (groups, prev_groups)):
+                    if prev is None:
+                        store.pop(j, None)
+                    else:
+                        store[j] = prev
                 save()
             elif key == ord("r"):
                 zv.reset()
