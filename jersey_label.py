@@ -12,6 +12,7 @@ identity plan always called for:
   Backspace        remove the last typed digit
   n                confident this is NOT a roster player (e.g. a misclassified opponent)
   x                the crops show TWO DIFFERENT people - tracklet_stitch.py over-merged this one
+  o                a substitute in a bib/off the pitch - a roster player, but not playing right now
   s                skip, unsure - you do not have to read a printed number, recognizing the player is enough
   m                more crops: page through further sampled frames for this same player
   b                back one player (undo the last label)
@@ -25,12 +26,15 @@ no coordinate mapping to reset). Progress is saved after every player, so rerunn
 stopped. Labels go to OUT/jersey_truth.csv (git-ignored under data/). The crops show people: keep them local.
 
 `apply` joins the labels with tracklet_stitch.csv and roster.csv into OUT/player_identity.csv (one row per
-original track_id) and reports roster coverage plus three things worth a second look: the same jersey given to
-two different stitched player_ids (a sign tracklet_stitch.py under-merged them - they are probably one real
-player), any player_id marked "mixed" (the opposite mistake - it over-merged two different real people), and
-any tracklet flagged not-on-roster (a role-classification leak worth knowing about). A "mixed" player_id gets
-no identity in the output, same as not-on-roster, since neither the jersey typed nor "not on roster" would be
-correct for both of the people actually in it.
+original track_id) and reports roster coverage plus these worth a second look: the same jersey given to two
+different stitched player_ids (a sign tracklet_stitch.py under-merged them - they are probably one real
+player), any player_id marked "mixed" (the opposite mistake - it over-merged two different real people), any
+tracklet flagged not-on-roster (a role-classification leak worth knowing about), and any marked "bench" (a
+substitute/bibbed player who should have failed the on-pitch check in pitch_mask.py or team_classify.py's
+sideline_suspect flag but didn't - worth knowing about for the same reason as not-on-roster). Both "mixed" and
+"bench" player_ids get no identity in the output, same as not-on-roster, since none of jersey/not-on-roster
+would be correct - "mixed" because it is two people, "bench" because the tracked positions are not on-field
+play and would corrupt running stats if attributed to that player's game performance.
 
 Example:
   python jersey_label.py label --run data\\clipA
@@ -114,6 +118,9 @@ class Session:
     def mixed(self) -> None:
         self._set(None, "mixed")
 
+    def bench(self) -> None:
+        self._set(None, "bench")
+
     def skip(self) -> None:
         self._set(None, "skipped")
 
@@ -161,8 +168,8 @@ def render(
     zoom_txt = f"  zoom {zoom:.1f}x" if zoom != 1.0 else ""
     page_txt = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
     keys = (
-        "digits+Enter=jersey | n not on roster | x mixed (2 people) | s skip | m more crops | "
-        "b back | wheel zoom | r reset | q quit"
+        "digits+Enter=jersey | n not on roster | x mixed (2 people) | o bench/sub (bib) | s skip | "
+        "m more crops | b back | wheel zoom | r reset | q quit"
     )
     header = f"{index + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
     text = f"{header}{status}{typed_txt}{zoom_txt}{page_txt}   {keys}"
@@ -226,6 +233,9 @@ def cmd_label(args) -> None:
             elif key == ord("x"):
                 session.mixed()
                 typed, changed, moved = "", True, True
+            elif key == ord("o"):
+                session.bench()
+                typed, changed, moved = "", True, True
             elif key == ord("s"):
                 session.skip()
                 typed, changed, moved = "", True, True
@@ -257,14 +267,17 @@ def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
         "identified": int(confirmed.player_id.nunique()),
         "not_on_roster": int((truth.verdict == "not_on_roster").sum()),
         "mixed_bad_merges": truth[truth.verdict == "mixed"].player_id.tolist(),
+        "bench_or_sub": truth[truth.verdict == "bench"].player_id.tolist(),
         "skipped": int((truth.verdict == "skipped").sum()),
         "roster_players_seen": sorted(int(j) for j in confirmed.jersey.unique()),
         "roster_players_not_seen": sorted(int(j) for j in roster.jersey if j not in set(confirmed.jersey)),
         "jersey_conflicts": {int(j): confirmed[confirmed.jersey == j].player_id.tolist() for j in conflicts.index},
         "note": (
             "jersey_conflicts: tracklet_stitch.py probably under-merged those - likely one real player. "
-            "mixed_bad_merges: the opposite - tracklet_stitch.py joined two different real people; "
-            "those player_ids get no identity here."
+            "mixed_bad_merges: the opposite - tracklet_stitch.py joined two different real people. "
+            "bench_or_sub: a substitute/bibbed player that should have failed the on-pitch check upstream but "
+            "didn't - feedback for pitch_mask.py/team_classify.py, not tracklet_stitch.py. All three get no "
+            "identity in the output."
         ),
     }
     return out, report
