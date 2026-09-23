@@ -12,8 +12,12 @@ the "manual anchors" the project's roster-based identity plan always called for:
   b                back one player (undo the last label)
   q                save and quit
 
-Progress is saved after every player, so rerunning `label` resumes where you stopped. Labels go to
-OUT/jersey_truth.csv (git-ignored under data/). The crops show people: keep them local.
+  mouse wheel      zoom in or out on the crops - useful when a player is small in the frame
+  r                reset zoom to 1x
+
+Zoom stays where you set it across players (there is nothing to click here, unlike event_label.py, so there is
+no coordinate mapping to reset). Progress is saved after every player, so rerunning `label` resumes where you
+stopped. Labels go to OUT/jersey_truth.csv (git-ignored under data/). The crops show people: keep them local.
 
 `apply` joins the labels with tracklet_stitch.csv and roster.csv into OUT/player_identity.csv (one row per
 original track_id) and reports roster coverage plus two things worth a second look: the same jersey given to
@@ -105,7 +109,11 @@ class Session:
         return pd.DataFrame(rows, columns=TRUTH_COLS)
 
 
-def render(imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str) -> np.ndarray:
+ZOOM_STEP = 1.25
+MIN_ZOOM, MAX_ZOOM = 1.0, 4.0
+
+
+def render(imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str, zoom: float) -> np.ndarray:
     tiles = []
     for row in item["rows"]:
         img = imgs.get(row["ci"])
@@ -115,15 +123,23 @@ def render(imgs: dict, item: dict, index: int, total: int, label: dict | None, t
         cx, cy = int((row["x1"] + row["x2"]) / 2), int(row["y2"])
         x0 = int(np.clip(cx - CROP_W / 2, 0, img.shape[1] - CROP_W))
         y0 = int(np.clip(cy - CROP_H, 0, img.shape[0] - CROP_H))
-        tiles.append(img[y0 : y0 + CROP_H, x0 : x0 + CROP_W].copy())
+        crop = img[y0 : y0 + CROP_H, x0 : x0 + CROP_W].copy()
+        # mark which figure in the crop is the one being identified, since nearby players can appear too
+        bx1, by1 = int(row["x1"]) - x0, int(row["y1"]) - y0
+        bx2, by2 = int(row["x2"]) - x0, int(row["y2"]) - y0
+        cv2.rectangle(crop, (bx1, by1), (bx2, by2), (0, 255, 0), 2)
+        tiles.append(crop)
     tiles += [np.zeros((CROP_H, CROP_W, 3), np.uint8)] * (PER_PLAYER - len(tiles))
     show = np.hstack(tiles)
+    if zoom != 1.0:
+        show = cv2.resize(show, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC if zoom > 1 else cv2.INTER_AREA)
     sh, sw = show.shape[:2]
     status = f" [{label['verdict']}{' #' + str(label['jersey']) if label.get('jersey') else ''}]" if label else ""
     typed_txt = f"  typing: {typed}" if typed else ""
-    keys = "digits+Enter=jersey | n not on roster | s skip | b back | q quit"
+    zoom_txt = f"  zoom {zoom:.1f}x" if zoom != 1.0 else ""
+    keys = "digits+Enter=jersey | n not on roster | s skip | b back | wheel zoom | r reset | q quit"
     header = f"{index + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
-    text = f"{header}{status}{typed_txt}   {keys}"
+    text = f"{header}{status}{typed_txt}{zoom_txt}   {keys}"
     cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
     cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     return show
@@ -145,6 +161,14 @@ def cmd_label(args) -> None:
     for clip_frame, img in read_frames(run / "clip.mp4", list(needed)):
         jpgs[clip_frame // stride] = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])[1]
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
+    zoom = [1.0]  # a zoom level the owner sets once and keeps across players - no click coordinates depend on it
+
+    def on_mouse(event, _mx, _my, flags, _param):
+        if event == cv2.EVENT_MOUSEWHEEL:
+            factor = ZOOM_STEP if flags > 0 else 1 / ZOOM_STEP
+            zoom[0] = float(np.clip(zoom[0] * factor, MIN_ZOOM, MAX_ZOOM))
+
+    cv2.setMouseCallback(WINDOW, on_mouse)
     typed = ""
     try:
         while not session.done:
@@ -152,7 +176,8 @@ def cmd_label(args) -> None:
             imgs = {
                 row["ci"]: cv2.imdecode(jpgs[row["ci"]], cv2.IMREAD_COLOR) for row in item["rows"] if row["ci"] in jpgs
             }
-            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), session.labels.get(session.idx), typed))
+            label = session.labels.get(session.idx)
+            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), label, typed, zoom[0]))
             key = cv2.waitKey(30) & 0xFF
             changed = False
             if ord("0") <= key <= ord("9"):
@@ -163,6 +188,8 @@ def cmd_label(args) -> None:
                 typed = ""
             elif key == 8:  # Backspace
                 typed = typed[:-1]
+            elif key == ord("r"):
+                zoom[0] = 1.0
             elif key == ord("n"):
                 session.not_on_roster()
                 typed, changed = "", True
