@@ -158,8 +158,9 @@ def render(img_lookup: dict, item: dict, index: int, total: int, label: dict | N
     for t in tiles:
         strip[:, x : x + t.shape[1]] = t
         x += t.shape[1] + gap
-    canvas = np.zeros((HEADER_H + CROP_H + FOOTER_H, strip.shape[1], 3), np.uint8)
-    canvas[HEADER_H : HEADER_H + CROP_H] = zv.apply(strip)
+    zoomed = zv.apply(strip)  # may be larger than the strip: the window grows with zoom
+    canvas = np.zeros((HEADER_H + zoomed.shape[0] + FOOTER_H, zoomed.shape[1], 3), np.uint8)
+    canvas[HEADER_H : HEADER_H + zoomed.shape[0]] = zoomed
     status = f"  [{label['verdict']}: {label['truth_role']}]" if label else ""
     flags = f"candidate={item['player_candidate']} sideline={item['sideline_suspect']} rows={item['n_rows']}"
     header = (
@@ -203,7 +204,9 @@ def cmd_label(args) -> None:
         jpgs[clip_frame // stride] = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])[1]
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
-    zv = ZoomView()  # zooms the crop strip only; the header row sits above it, so shift mouse y to strip pixels
+    zv = ZoomView(
+        reserve_h=HEADER_H + FOOTER_H
+    )  # zooms the crop strip only; the header row sits above it, so shift mouse y to strip pixels
     cv2.setMouseCallback(WINDOW, lambda event, mx, my, flags, _p: zv.on_mouse(event, mx, my - HEADER_H, flags))
     try:
         while not session.done:
