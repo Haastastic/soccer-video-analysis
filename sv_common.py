@@ -265,3 +265,61 @@ def track_metrics(tr: pd.DataFrame, fps: float, n_proc: int, cache: Cache, expec
     out["swap_suspects_per_min"] = round(float(susp.sum()) / max(minutes, 1e-6), 1)
     out["score"] = round(out["new_ids_per_min"] + 3 * out["swap_suspects_per_min"], 1)
     return out
+
+
+# ---------------------------------------------------------------- review UI zoom
+
+
+class ZoomView:
+    """Cursor-centered zoom for the OpenCV review tools. Every clip review tool should have one.
+
+    The window keeps its size: zooming crops into the content and scales that back up, so nothing runs off the
+    screen (growing the whole image did, past about 2x on a laptop). Mouse wheel zooms at the cursor, right click
+    pans to a spot, reset() goes back to the full view. Draw status and key text AFTER apply(), so it stays readable.
+    Tools that need their own left clicks call on_mouse() from their callback and map clicks with to_content().
+    """
+
+    STEP = 1.25
+    MAX = 8.0
+
+    def __init__(self):
+        self.zoom = 1.0
+        self.cx = self.cy = None  # view center in content pixels; None = content center
+        self.view = (0.0, 0.0, 1.0, 1.0)  # x0, y0, w, h in content pixels, from the last apply()
+        self.out_size = (1, 1)
+
+    def reset(self) -> None:
+        self.zoom, self.cx, self.cy = 1.0, None, None
+
+    def to_content(self, mx: float, my: float) -> tuple:
+        x0, y0, vw, vh = self.view
+        return x0 + mx * vw / self.out_size[0], y0 + my * vh / self.out_size[1]
+
+    def on_mouse(self, event, mx, my, flags, _param=None) -> bool:
+        """Handle wheel and right click. Returns True if the event was used."""
+        if event == cv2.EVENT_MOUSEWHEEL:
+            self.cx, self.cy = self.to_content(mx, my)
+            factor = self.STEP if flags > 0 else 1 / self.STEP
+            self.zoom = float(np.clip(self.zoom * factor, 1.0, self.MAX))
+            return True
+        if event == cv2.EVENT_RBUTTONDOWN:
+            self.cx, self.cy = self.to_content(mx, my)
+            return True
+        return False
+
+    def apply(self, content: np.ndarray) -> np.ndarray:
+        h, w = content.shape[:2]
+        self.out_size = (w, h)
+        vw, vh = w / self.zoom, h / self.zoom
+        cx = self.cx if self.cx is not None else w / 2
+        cy = self.cy if self.cy is not None else h / 2
+        x0 = float(np.clip(cx - vw / 2, 0, w - vw))
+        y0 = float(np.clip(cy - vh / 2, 0, h - vh))
+        self.view = (x0, y0, vw, vh)
+        if self.zoom == 1.0:
+            return content.copy()
+        crop = content[int(y0) : int(round(y0 + vh)), int(x0) : int(round(x0 + vw))]
+        return cv2.resize(crop, (w, h), interpolation=cv2.INTER_CUBIC)
+
+    def label(self) -> str:
+        return f"  zoom {self.zoom:.1f}x" if self.zoom > 1.0 else ""
