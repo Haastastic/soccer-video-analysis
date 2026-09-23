@@ -383,6 +383,9 @@ def cmd_score(args) -> None:
     gt = truth_events(truth, roles)
     pred, _, _ = detect(args.run, args.min_confidence)
     if len(pred):
+        # detect() computes confidence but does not filter by it (events.py's CLI does that after the call, to
+        # split into events.csv vs review_queue.csv), so filter here to score what the pipeline actually trusts.
+        pred = pred[pred.confidence >= args.min_confidence]
         pred = pred[pred.time_s.between(truth.time_s.min() - args.tol_s, truth.time_s.max() + args.tol_s)]
     report = {
         "labeled_frames": int(len(truth)),
