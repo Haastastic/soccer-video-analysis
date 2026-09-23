@@ -10,10 +10,16 @@ in time order and says whether it stays on one person.
 ones that barely move (bench, coaches: a static tracklet is trivially "one person" and would flatter every
 config). All configs are shuffled together and the config is never shown, so the labels are blind.
 
-  p                one person the whole time
-  x                two or more different people (the box moves to someone else at some point)
+Every crop starts as person A. When the box is on someone else in some crops, group them by person:
+
+  click            cycle that crop's person: A -> B -> ... -> F -> A
+  shift+click      a swap here: this crop and every later one move to the next person
+  ctrl+click       "?" for that crop (cannot tell who it is), ctrl+click again to undo
+  Enter            save the grouping: one person if every crop is A (or ?), else two or more
+  p                one person the whole time (resets any grouping)
+  x                two or more people, but too hard to group
   s                skip, cannot tell
-  m                more crops: page through further sampled frames of the same tracklet
+  m                more crops, if they do not all fit on one page
   b                back one tracklet (undo the last label)
   q                save and quit
   mouse wheel      zoom in or out, centered on the cursor
@@ -22,13 +28,20 @@ config). All configs are shuffled together and the config is never shown, so the
                    window grows with zoom up to the screen size, then magnifies inside it
 
 Crops are in time order, left to right then top to bottom, with the time in seconds on each; the green box is
-the tracked person. A swap usually shows as a change of kit, build, or position in the group between two
-consecutive crops. Progress is saved after every tracklet, so rerunning `label` resumes.
+the tracked person, the colored frame and letter are the person group. A swap usually shows as a change of kit,
+build, or position in the group between two consecutive crops. Progress is saved after every tracklet, so
+rerunning `label` resumes. Tracklets marked "two or more" before grouping existed come back once, at the end.
 
-`score` reports, per config: share of tracklets that are one person, the same weighted by duration (the share
-of tracked player-time that is clean), and a 95% interval, because samples are small.
+Why group: each crop is one detection (det_row), so the groups are ground truth that does not depend on the
+tracker config: two crops in different groups are different people under any config.
 
-Outputs (git-ignored under data/): RUN/sweeps/NAME/purity_items.json, purity_truth.csv, purity_score.json.
+`score` reports, per config: share of tracklets that are one person, the same weighted by duration, a 95%
+interval (samples are small), and from the grouped ones: the share of tracked time that belongs to the main
+person, switches per tracklet, and how many switches sit at a detection gap of 1 s or more (a lost track
+re-found by someone else) versus in continuous tracking (two players in contact).
+
+Outputs (git-ignored under data/): RUN/sweeps/NAME/purity_items.json, purity_truth.csv, purity_crops.csv,
+purity_score.json.
 The crops show minors: keep them local.
 
 Example:
@@ -44,14 +57,22 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, ZoomView, cache_stride, read_frames, require_under_data
+from sv_common import Cache, ZoomView, cache_stride, read_frames, require_under_data, screen_size
 
 WINDOW = "track purity"
 CROP_W, CROP_H = 220, 320
-COLS, ROWS = 4, 2
+ROWS = 2
+N_CROPS = 32  # sampled per tracklet
+# as many columns as fit the screen (an ultrawide shows all 32 crops at once), 4 to 16
+COLS = int(np.clip(screen_size()[0] // CROP_W, 4, N_CROPS // ROWS))
 PER_PAGE = COLS * ROWS
-PAGES = 4
-TRUTH_COLS = ["item", "config", "track_id", "duration_s", "verdict"]
+TRUTH_COLS = ["item", "config", "track_id", "duration_s", "verdict", "grouped"]
+CROP_COLS = ["item", "config", "track_id", "crop", "ci", "det_row", "group"]
+GROUPS = "ABCDEF"
+GROUP_COLOR = {
+    "A": (200, 200, 200), "B": (0, 140, 255), "C": (255, 0, 255), "D": (255, 255, 0), "E": (0, 0, 255),
+    "F": (0, 255, 128), "?": (60, 60, 60),
+}  # fmt: skip
 
 
 def moving_tracks(tr: pd.DataFrame, cache: Cache, min_extent_h: float = 0.75) -> set:
@@ -84,8 +105,8 @@ def sample_items(run, sweep: str, configs: list, n: int, min_s: float, seed: int
             weights.pop(k)
         for tid in chosen:
             d = tr[tr.track_id == tid].sort_values("ci").reset_index(drop=True)
-            idx = np.linspace(0, len(d) - 1, min(PER_PAGE * PAGES, len(d))).round().astype(int)
-            rows = d.iloc[idx][["ci", "x1", "y1", "x2", "y2"]].to_dict("records")
+            idx = np.linspace(0, len(d) - 1, min(N_CROPS, len(d))).round().astype(int)
+            rows = d.iloc[idx][["ci", "det_row", "x1", "y1", "x2", "y2"]].to_dict("records")
             items.append(
                 dict(config=int(c), params=params, track_id=int(tid), duration_s=round(float(ok[tid]), 1), rows=rows)
             )
@@ -106,7 +127,43 @@ def crop(img, row) -> np.ndarray:
     return out
 
 
-def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache) -> np.ndarray:
+def add_det_rows(run, sweep: str, items: list) -> bool:
+    """Fill det_row into samples drawn before grouping existed (same ci and track, so the same detection)."""
+    missing = [it for it in items if "det_row" not in it["rows"][0]]
+    for c in sorted({it["config"] for it in missing}):
+        tr = pd.read_csv(run / "sweeps" / sweep / f"tracks_{c}.csv.gz", usecols=["track_id", "ci", "det_row"])
+        lookup = tr.set_index(["track_id", "ci"]).det_row
+        for it in missing:
+            if it["config"] == c:
+                for row in it["rows"]:
+                    row["det_row"] = int(lookup.get((it["track_id"], row["ci"]), -1))
+    return bool(missing)
+
+
+def switch_to_next(groups: list, j: int) -> None:
+    """A swap at crop j: j and every later crop move to the person after j's (unknown crops stay unknown)."""
+    nxt = GROUPS[min(GROUPS.index(groups[j].upper()) + 1, len(GROUPS) - 1)]
+    for k in range(j, len(groups)):
+        if groups[k] in GROUPS:
+            groups[k] = nxt
+
+
+# An unknown crop is stored as the lowercase of its letter, so un-marking it restores the letter it had.
+# It is shown and saved as "?".
+def shown(g: str) -> str:
+    return "?" if g.islower() else g
+
+
+def cycle(groups: list, j: int) -> None:
+    g = groups[j]
+    groups[j] = g.upper() if g.islower() else GROUPS[(GROUPS.index(g) + 1) % len(GROUPS)]
+
+
+def toggle_unknown(groups: list, j: int) -> None:
+    groups[j] = groups[j].upper() if groups[j].islower() else groups[j].lower()
+
+
+def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, groups, note="") -> np.ndarray:
     rows = item["rows"]
     n_pages = max(1, -(-len(rows) // PER_PAGE))
     page_rows = list(range(page * PER_PAGE, min((page + 1) * PER_PAGE, len(rows))))
@@ -118,15 +175,24 @@ def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache) -> n
             t = tiles[j].copy()
             txt = f"{(rows[j]['ci'] - rows[0]['ci']) / fps_cache:.1f}s"
             cv2.putText(t, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+            color = GROUP_COLOR[shown(groups[j])]
+            cv2.rectangle(t, (0, 0), (CROP_W - 1, CROP_H - 1), color, 4)
+            cv2.putText(t, shown(groups[j]), (CROP_W - 34, 34), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3, cv2.LINE_AA)
             cells.append(t)
         else:
             cells.append(blank)
     show = zv.apply(np.vstack([np.hstack(cells[r * COLS : (r + 1) * COLS]) for r in range(ROWS)]))
     sh, sw = show.shape[:2]
     status = f" [{label}]" if label else ""
+    visible = [shown(g) for g in groups]
+    counts = " ".join(f"{g}:{visible.count(g)}" for g in GROUPS + "?" if visible.count(g))
+    pages = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
+    if GROUPS[-1] in groups:
+        counts += f" (max {len(GROUPS)} people: a further swap cannot get its own letter, press x instead)"
     text = (
-        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  page {page + 1}/{n_pages}{zv.label()}   "
-        "p one person | x two+ people | s skip | m more | b back | wheel zoom | right-click pan | r reset | q quit"
+        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{pages}{zv.label()}{note}   "
+        "click cycle person | shift+click swap here | ctrl+click ? | Enter save | p one person | "
+        "x two+ ungrouped | s skip | b back | wheel zoom | right-click pan | r reset | q quit"
     )
     cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
     cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
@@ -157,17 +223,35 @@ def cmd_label(args) -> None:
         configs = [int(c) for c in args.configs.split(",")]
         items = sample_items(args.run, args.sweep, configs, args.n, args.min_s, args.seed)
         items_path.write_text(json.dumps(items))
-    labels = {}
+    if add_det_rows(args.run, args.sweep, items):
+        items_path.write_text(json.dumps(items))
+    crops_path = sdir / "purity_crops.csv"
+    labels, grouped, groups = {}, {}, {}
     if truth_path.exists():
-        labels = {int(r.item): r.verdict for r in pd.read_csv(truth_path).itertuples()}
+        t = pd.read_csv(truth_path)
+        if "grouped" not in t:
+            t["grouped"] = np.nan  # labeled before grouping existed
+        for r in t.itertuples():
+            labels[int(r.item)] = r.verdict
+            if not pd.isna(r.grouped):
+                grouped[int(r.item)] = bool(r.grouped)
+    if crops_path.exists():
+        for i, d in pd.read_csv(crops_path).groupby("item"):
+            groups[int(i)] = ["a" if g == "?" else g for g in d.sort_values("crop").group]  # prior letter lost
 
     def save():
         rows = [
             dict(item=i, config=items[i]["config"], track_id=items[i]["track_id"],
-                 duration_s=items[i]["duration_s"], verdict=v)
+                 duration_s=items[i]["duration_s"], verdict=v, grouped=grouped.get(i))
             for i, v in sorted(labels.items())
         ]  # fmt: skip
         pd.DataFrame(rows, columns=TRUTH_COLS).to_csv(truth_path, index=False)
+        crows = [
+            dict(item=i, config=items[i]["config"], track_id=items[i]["track_id"], crop=j,
+                 ci=items[i]["rows"][j]["ci"], det_row=items[i]["rows"][j]["det_row"], group=shown(g))
+            for i in sorted(groups) if grouped.get(i) and i in labels for j, g in enumerate(groups[i])
+        ]  # fmt: skip
+        pd.DataFrame(crows, columns=CROP_COLS).to_csv(crops_path, index=False)
 
     stride = cache_stride(args.run)
     fps_cache = Cache(args.run / "cache").fps
@@ -183,26 +267,88 @@ def cmd_label(args) -> None:
     for i in tiles:
         tiles[i] = [t if t is not None else np.zeros((CROP_H, CROP_W, 3), np.uint8) for t in tiles[i]]
 
-    idx = next((i for i in range(len(items)) if i not in labels), len(items))
-    zv, page = ZoomView(), 0
+    # unlabeled first, then (once) anything marked "two or more" before grouping existed
+    todo = [i for i in range(len(items)) if i not in labels]
+    todo += [i for i in range(len(items)) if labels.get(i) == "mixed" and i not in grouped]
+    zv = ZoomView()
+    state = dict(pos=0, page=0)
+    history = []  # (position in todo, previous label, previous grouped flag, previous groups), for b
+
+    def cur_groups():
+        i = todo[state["pos"]]
+        if i not in groups or len(groups[i]) != len(items[i]["rows"]):
+            groups[i] = ["A"] * len(items[i]["rows"])
+        return groups[i]
+
+    def on_mouse(event, mx, my, flags, _p):
+        if zv.on_mouse(event, mx, my, flags) or event != cv2.EVENT_LBUTTONDOWN or state["pos"] >= len(todo):
+            return
+        cx, cy = zv.to_content(mx, my)
+        col, row = int(cx // CROP_W), int(cy // CROP_H)
+        j = state["page"] * PER_PAGE + row * COLS + col
+        g = cur_groups()
+        if not (0 <= col < COLS and 0 <= row < ROWS and j < len(g)):
+            return
+        if flags & cv2.EVENT_FLAG_SHIFTKEY:
+            switch_to_next(g, j)
+        elif flags & cv2.EVENT_FLAG_CTRLKEY:
+            toggle_unknown(g, j)
+        else:
+            cycle(g, j)
+
+    def finish(i, verdict, is_grouped, reset=False):
+        # an item re-queued from an earlier session already has a verdict: b must restore it, not erase it
+        before = (labels.get(i), grouped.get(i), list(groups[i]) if i in groups else None)
+        labels[i], grouped[i] = verdict, is_grouped
+        if reset:
+            groups[i] = ["A"] * len(items[i]["rows"])
+        save()
+        history.append((state["pos"], *before))
+        state["confirm"] = None
+        state["pos"], state["page"] = state["pos"] + 1, 0
+
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(WINDOW, zv.on_mouse)
-    verdicts = {ord("p"): "pure", ord("x"): "mixed", ord("s"): "skipped"}
+    cv2.setMouseCallback(WINDOW, on_mouse)
     try:
-        while idx < len(items):
-            item = items[idx]
+        while state["pos"] < len(todo):
+            i = todo[state["pos"]]
+            item, g, page = items[i], cur_groups(), state["page"]
             n_pages = max(1, -(-len(item["rows"]) // PER_PAGE))
-            cv2.imshow(WINDOW, render(tiles[idx], item, idx, len(items), labels.get(idx), zv, page, fps_cache))
+            # re-queued: marked "two or more" in an earlier session, before grouping existed
+            requeued = labels.get(i) == "mixed" and i not in grouped
+            note = ""
+            if state.get("confirm") == i:
+                note = "  EARLIER YOU MARKED THIS TWO+. Enter again = one person after all"
+            elif requeued:
+                note = "  (earlier: two+, please group it; s keeps it as two+ ungrouped)"
+            show = render(tiles[i], item, state["pos"], len(todo), labels.get(i), zv, page, fps_cache, g, note)
+            cv2.imshow(WINDOW, show)
             key = cv2.waitKey(30) & 0xFF
-            if key in verdicts:
-                labels[idx] = verdicts[key]
-                save()
-                idx, page = idx + 1, 0
+            if key in (13, 10):  # Enter: save the grouping
+                people = {x for x in g if x in GROUPS}
+                if requeued and len(people) <= 1 and state.get("confirm") != i:
+                    state["confirm"] = i  # a reflexive Enter must not overturn an earlier "two or more"
+                elif not people:  # every crop unknown: nothing established; keep an earlier two+ verdict
+                    finish(i, "mixed" if requeued else "skipped", False)
+                else:
+                    finish(i, "pure" if len(people) == 1 else "mixed", True)
+            elif key == ord("p"):
+                finish(i, "pure", True, reset=True)
+            elif key == ord("x"):
+                finish(i, "mixed", False)
+            elif key == ord("s"):
+                finish(i, "mixed" if requeued else "skipped", False)  # s never drops an earlier two+ verdict
             elif key == ord("m"):
-                page = (page + 1) % n_pages
-            elif key == ord("b") and idx > 0:
-                idx, page = idx - 1, 0
-                labels.pop(idx, None)
+                state["page"] = (page + 1) % n_pages
+            elif key == ord("b") and history:
+                pos, prev_label, prev_grouped, prev_groups = history.pop()
+                state["pos"], state["page"] = pos, 0
+                j = todo[pos]
+                for store, prev in ((labels, prev_label), (grouped, prev_grouped), (groups, prev_groups)):
+                    if prev is None:
+                        store.pop(j, None)
+                    else:
+                        store[j] = prev
                 save()
             elif key == ord("r"):
                 zv.reset()
@@ -211,7 +357,7 @@ def cmd_label(args) -> None:
     finally:
         cv2.destroyAllWindows()
         save()
-    print(f"Saved {len(labels)} of {len(items)} labels to {truth_path}. Run `score` when done.")
+    print(f"Saved {len(labels)} of {len(items)} labels to {truth_path}, groups to {crops_path}. Run `score`.")
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> list:
@@ -223,11 +369,56 @@ def wilson(k: int, n: int, z: float = 1.96) -> list:
     return [round(100 * (c - h), 1), round(100 * (c + h), 1)]
 
 
+def group_metrics(run, sweep: str, d: pd.DataFrame, crops: pd.DataFrame | None, cache_fps: float) -> dict:
+    """From grouped tracklets of one config: how much of the time is the main person, and where swaps happen."""
+    is_grouped = d.grouped.fillna(False).astype(bool)
+    g = d[(d.verdict == "mixed") & is_grouped]
+    ungrouped = (d.verdict == "mixed") & ~is_grouped
+    out = dict(
+        mixed_grouped=len(g),
+        mixed_ungrouped=int(ungrouped.sum()),
+        # main_person_time_pct leaves these out (unknown split), and they are likely the worst ones: report
+        # their share of labeled time so the percentage is read with that in mind
+        mixed_ungrouped_time_pct=round(100 * float(d.duration_s[ungrouped].sum() / d.duration_s.sum()), 1),
+    )
+    # one-person tracklets are 100% main person whether or not they went through grouping; ungrouped "two or
+    # more" ones are left out of the time share, since how much of them is the main person is unknown
+    shares = [(r.duration_s, 1.0) for r in d[d.verdict == "pure"].itertuples()]
+    switches, at_gap = 0, 0
+    if crops is not None and len(g):
+        tr = pd.read_csv(run / "sweeps" / sweep / f"tracks_{int(g.config.iloc[0])}.csv.gz", usecols=["track_id", "ci"])
+    for r in g.itertuples() if crops is not None else []:
+        k = crops[crops.item == r.item].sort_values("crop")
+        k = k[k.group != "?"]
+        if not len(k):
+            continue
+        shares.append((r.duration_s, k.group.value_counts().iloc[0] / len(k)))
+        track_ci = np.sort(tr.ci[tr.track_id == r.track_id].unique())
+        for a, b in zip(k.iloc[:-1].itertuples(), k.iloc[1:].itertuples(), strict=True):
+            if a.group == b.group:
+                continue
+            switches += 1
+            between = track_ci[(track_ci >= a.ci) & (track_ci <= b.ci)]
+            if len(between) > 1 and np.diff(between).max() >= cache_fps:  # a 1 s+ hole: lost, then re-found
+                at_gap += 1
+    if shares:
+        dur = np.array([s[0] for s in shares])
+        out["main_person_time_pct"] = round(100 * float((dur * np.array([s[1] for s in shares])).sum() / dur.sum()), 1)
+        out["switches_per_min"] = round(switches / (dur.sum() / 60), 2)
+        out["switches"] = switches
+        out["switches_at_1s_gap"] = at_gap
+    return out
+
+
 def cmd_score(args) -> None:
     sdir = args.run / "sweeps" / args.sweep
     check_configs(args.run, args.sweep, json.loads((sdir / "purity_items.json").read_text()))
     t = pd.read_csv(sdir / "purity_truth.csv")
+    if "grouped" not in t:
+        t["grouped"] = False
+    crops = pd.read_csv(sdir / "purity_crops.csv") if (sdir / "purity_crops.csv").exists() else None
     res = pd.read_csv(sdir / "results.csv").set_index("config") if (sdir / "results.csv").exists() else None
+    cache_fps = Cache(args.run / "cache").fps
     out = {}
     for c, d in t[t.verdict != "skipped"].groupby("config"):
         k, n = int((d.verdict == "pure").sum()), len(d)
@@ -239,6 +430,7 @@ def cmd_score(args) -> None:
             pure_time_pct=round(100 * d.duration_s[d.verdict == "pure"].sum() / d.duration_s.sum(), 1),
             median_sampled_s=float(d.duration_s.median()),
         )
+        row.update(group_metrics(args.run, args.sweep, d, crops, cache_fps))
         if res is not None and c in res.index:
             r = res.loc[c]
             row["config"] = dict(
