@@ -93,6 +93,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   python run_all.py --video <game.mp4> --start HH:MM:SS --duration 300 --out data\clipA --grid wide --share-dir <folder Claude can read>
 - Individual stages: detect_cache.py, replay_trackers.py, ball_link.py (each has --help)
 - Events: events.py --run <run> [--montage] (needs ball_path.csv, tracklet_roles.csv)
+- Hand-label events: event_label.py label --run <run> --start <s> --duration <s>, then event_label.py score --run <run> (writes events_truth.csv, events_score.json)
 - Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
 - Place pitch anchors: pitch_anchor_ui.py --run <run> (local browser UI; writes pitch_anchors.local.json)
@@ -102,5 +103,5 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 1. DONE: a third hand-labeled window (same game, a different 5 minutes) confirmed min-conf 0.25 generalizes for precision (see Phase 1b findings). It also found a real detector blind spot on the boundary track, which is a separate, deeper limitation (retraining or new examples, not a pipeline setting) and is not being worked on now.
 2. DONE, with caveats: role_label.py hand-check completed on both clips (see Phase 2 findings). 65 to 73% accuracy, capped by tracklet ID fragmentation rather than the color model. Not retuned: per-role sample sizes are too small to trust a parameter change. Revisit after tracklet stitching (step 7) or a larger labeled set.
 3. DONE for both clips: clipB has 4 anchors (130s, 180.1s, 197s, 270s), all cross-checking within 0.5 to 5.05 m. clipA has 6 anchors (4s, 66s, 96s, 125s, 156s, 220s); its calibration is accepted with a known, measured limitation (3 to 60+ m error depending on distance from an anchor, versus clipB's much tighter fit) rather than fixed further - see Phase 3 findings for why. `tracklet_pitch_xy.csv.gz` in both data/clipA and data/clipB is ready to use.
-4. (needs the owner) Hand-label about 60 s of events (touches, passes, possession changes) to tune the events.py thresholds and score it.
+4. (needs the owner) event_label.py is built: `label --run <run> --start <s> --duration 60` steps through a window, click the player who has the ball each frame (or n/x/s/b/q). `score --run <run>` then derives ground-truth touches/possessions/passes/turnovers and compares them with events.csv. Not yet run - about 60 s of labeling is still needed before events.py's thresholds can be tuned and scored for real.
 5. STOP POINT REACHED (owner's limit was step 6). Step 7 (identity, roster, review UI) needs roster.csv, which does not exist, plus jersey anchors. Do not start it without the owner.
