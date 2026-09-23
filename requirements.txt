@@ -5,3 +5,4 @@ pandas
 numpy
 pyyaml
 tabulate
+onnxruntime  # CPU build; only reid_cache.py needs it

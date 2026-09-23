@@ -2,6 +2,7 @@ data/
 roster.csv
 *.mp4
 *.pt
+*.onnx
 .venv/
 __pycache__/
 .ruff_cache/
