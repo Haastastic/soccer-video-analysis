@@ -2,8 +2,11 @@
 
 `label` shows one stitched player at a time (only "target" and "goalkeeper" roles - the roster is one team),
 with up to 4 crops spread across all the tracklets tracklet_stitch.py merged into it. Jersey numbers are not
-readable by plain OCR at this resolution (see CLAUDE.md), so this is recognition by eye (kit, build, position),
-the "manual anchors" the project's roster-based identity plan always called for:
+readable by plain OCR at this resolution (see CLAUDE.md) - but the owner CAN often read one directly, with zoom,
+when a crop happens to catch the player's back. That is the identification method that actually works in
+practice, more than recognition by build/kit alone, so `m` (more crops) is there specifically to page through
+enough sampled frames to find a number-visible one. This is the "manual anchors" the project's roster-based
+identity plan always called for:
 
   0-9 then Enter   type the jersey number, Enter to confirm (checked against roster.csv)
   Backspace        remove the last typed digit
@@ -49,7 +52,10 @@ ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
 ROSTER_ROLES = ("target", "goalkeeper")  # roster.csv is one team; opponents are never matched against it
 CROP_W, CROP_H = 220, 320
 PER_PLAYER = 4  # crops shown at once
-PAGES = 4  # "more" (m) cycles through this many pages, so up to PER_PLAYER*PAGES distinct sampled frames
+# Jersey numbers aren't OCR-legible, but ARE sometimes readable by eye (with zoom) when a back-facing frame
+# happens to be sampled - the owner reported this is the identification method that actually works for them,
+# more than recognition by build/kit. More pages means more chances to catch such a frame for a given player.
+PAGES = 8  # "more" (m) cycles through this many pages, so up to PER_PLAYER*PAGES distinct sampled frames
 TRUTH_COLS = ["player_id", "jersey", "verdict"]
 
 
