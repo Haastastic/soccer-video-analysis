@@ -18,8 +18,12 @@ doing essentially all the real work here, and it is inherently ambiguous with se
 through the same area. This is a first-pass proposal to be corrected by roster-based manual review, not a
 finished identity system - see the module docstring's parameter comments for how far it currently gets.
 
-Thresholds are hand-set guesses, not tuned: there is no ground truth for this yet. --montage writes sampled
-crops per stitched player, local review only, to sanity-check by eye.
+Thresholds were retuned once real ground truth existed: jersey_label.py's "mixed" (x) verdict marks a stitched
+player as actually two different people. See the constant comments below for the before/after numbers - real
+progress, not a fix, since no separating threshold on the available signals (position, kit color, which is
+uniform within a team) cleanly tells correct merges from incorrect ones. --montage writes sampled crops per
+stitched player, local review only, to sanity-check by eye; jersey_label.py's "mixed" verdict is the more
+rigorous check, since it comes from the owner actually recognizing the players.
 
 Example:
   python tracklet_stitch.py --run data\\clipA --montage
@@ -36,14 +40,24 @@ import pandas as pd
 from sv_common import Cache, cache_stride, read_frames, require_under_data
 
 TEAM_ROLES = ("target", "opponent", "goalkeeper")
-# The camera follows the ball, so an off-ball player can be out of frame for many seconds, not just a brief
-# occlusion - MAX_GAP_S=3 covered only 57% of even the closest same-role gaps on a first real clip. Widened
-# empirically until target-team players (roster size 21) stopped grossly outnumbering the roster; still leaves
-# 3+ tracklets per player on average, not the ~1 a perfect stitch would give - see the module docstring.
-MAX_GAP_S = 15.0  # longest break between tracklets that can still be the same player
-BASE_SLACK_H = 1.5  # position slack (body heights) allowed even at zero gap, for box/detection noise
-MAX_SPEED_H_S = 2.5  # extra slack per second of gap, body heights per second (a generous running speed)
-MAX_COLOR_DIST = 25.0  # Lab distance (torso + legs) allowed between the two tracklets' measured kit color
+# History of these numbers (see the module docstring for the full story):
+# 1) MAX_GAP_S=3 (an initial guess) covered only 57% of even the closest same-role gaps, because an off-ball
+#    player can leave frame for many seconds, not just a brief occlusion (the camera does NOT follow the ball -
+#    an earlier, incorrect assumption; see CLAUDE.md's Footage facts - the real reason it pans is unconfirmed).
+# 2) Widened blind (no ground truth yet) until target-team player counts stopped grossly outnumbering the
+#    21-player roster. This overshot badly: hand-labeling 35 stitched players with jersey_label.py found 18 of
+#    them (51%) were actually two different real people merged together - color barely discriminates within a
+#    team (everyone wears the same kit), and looser position bounds let unrelated same-team players match.
+# 3) Retuned against that real labeled data (not blind): compared the position distance (dist_h) and gap of the
+#    edges actually chosen by the merger, confirmed-correct vs mixed (known-bad). No clean separating threshold
+#    exists - this is a real ceiling on what position + team-role alone can resolve when several same-team
+#    players move through one area - but tightening these settings shifted the mix from 32% correct among kept
+#    merges to about 48%, keeping 61% of correct merges while cutting bad ones from 100% to 31% (on that sample).
+#    Better, not solved: keep using jersey_label.py's "mixed" (x) verdict as the real safety net.
+MAX_GAP_S = 10.0  # longest break between tracklets that can still be the same player
+BASE_SLACK_H = 1.0  # position slack (body heights) allowed even at zero gap, for box/detection noise
+MAX_SPEED_H_S = 0.5  # extra slack per second of gap, body heights per second
+MAX_COLOR_DIST = 25.0  # Lab distance (torso + legs) allowed - kept loose since it showed no separating power
 EDGE_FRAMES = 5  # frames averaged at each end of a tracklet, for a less noisy position there
 
 
@@ -172,8 +186,9 @@ def cmd_run(args) -> None:
             "note": "stitched should be <= roster size; usually well under, since not everyone plays every window",
         },
         "note": (
-            "Thresholds are hand-set guesses, not tuned. Does not fix a tracklet that already drifted onto a "
-            "different real person mid-lifetime."
+            "Thresholds are retuned against real jersey_label.py verdicts (see module docstring), not just "
+            "guessed - but no clean separating threshold exists on the available signals, so real over-merges "
+            "remain. Does not fix a tracklet that already drifted onto a different real person mid-lifetime."
         ),
     }
     (args.run / "tracklet_stitch_report.json").write_text(json.dumps(report, indent=2))
