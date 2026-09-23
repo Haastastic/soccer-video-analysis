@@ -81,6 +81,15 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - TRIED AND REVERTED: hypothesized that the same-player merge guard (`MIN_PASS_H`, currently only applied when the two predicted teams match) should also apply to turnovers, since a misclassified-role fragment would show as a team mismatch and evade it. Implemented, regenerated events.csv, rescored: turnover precision improved (14.3% to 33.3% at confidence 0) but recall dropped to 0%, because the single real hand-confirmed turnover in this sample happened at 0.28 body heights separation - a genuine close-range steal, exactly the low-separation signature the fix assumed meant "same player." Reverted. Lesson: low separation is not on its own evidence of a tracking artifact for a turnover the way it is for a pass, because real turnovers often happen at close range by nature (contests, tackles, interceptions) while real passes do not start and end in the same spot.
 - Found and fixed a real bug while scoring: `events.detect()` accepts `min_confidence` but never used it - only `events.py`'s own CLI applied it, after the call. `event_label.py score --min-confidence` was a no-op before this was caught (0.5 and 0.0 gave identical scores). Fixed in event_label.py.
 
+## Phase 5 findings: step 7, tracklet stitching (tracklet_stitch.py)
+- roster.csv exists (2026-09-23): 21 players, one goalkeeper, from owner-provided screenshots. Git-ignored, matches LOCAL_CONTEXT.md's target-player jersey number.
+- First real attempt extrapolated a straight-line velocity from each tracklet's last few frames to predict where the next one should start. This badly overpredicted position error for real gaps (players change direction within a second or two), rejecting almost every genuine match: only 70 candidate edges out of 198 clipA tracklets, target-team "players" barely reduced from 84 to 64 against the 21-player roster. Replaced with a simple bound (a fixed slack plus a max-speed-per-second allowance from the last known position, not a velocity prediction).
+- With the position model fixed, the real bottleneck was the max-gap setting: the ball-following camera lets an off-ball player leave frame for many seconds, not just a brief occlusion, so a 3 s cap covered only 57% of even the closest real same-role tracklet gaps. Widened empirically (15 s max gap, 2.5 body-heights/s speed bound) until target-team players stopped grossly outnumbering the roster.
+- Kit color barely discriminates WITHIN a team, since everyone on one side wears the same kit - it only confirms "same team," which the role match already does. Motion continuity is doing essentially all the real work, and that is inherently ambiguous with several same-team players moving through the same area at once.
+- Result on both clips (checked for generalization, not tuned to one): tracklets-per-player goes from 1.0 (no merging) to 3.1 (clipA target), 2.5 (clipA opponent), 2.3 (clipB target), 1.9 (clipB opponent). Real progress, well short of the approximately 1 a fully correct stitch would give.
+- Spot-checked `stitch_montage.png` by eye on clipA (3 stitched players): 2 clearly correct, one confirmed by a visible jersey number (#35) legible across crops. 1 likely false merge, at a contested-ball moment where a target and an opponent player overlap - a known hard case for this pipeline generally (Phase 2 already noted tracklets that straddle two people during overlaps), not a new failure mode.
+- Does NOT fix a tracklet that already drifted onto a different real person mid-lifetime (separate, pre-existing tracker bug). Does not assign names - that needs roster.csv plus jersey anchors (visual recognition by the owner, since jersey numbers are not OCR-legible at this resolution), the next piece of step 7. This is a first-pass proposal for manual review, not a finished identity system.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done, validated; use --grid wide)
@@ -88,7 +97,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 4. Team classification: team_classify.py (done; hand-checked, 65 to 73% accuracy, capped by tracklet fragmentation, goalkeeper weak)
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (done for both clips - clipB: 4 anchors, 0.5 to 5 m cross-check; clipA: 6 anchors, accepted with a known higher error floor (3 to 60+ m) from noisier camera motion in that clip - see Phase 3 findings)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
-7. Identity assignment with roster, tracklet stitching, review UI: NOT STARTED
+7. Identity assignment with roster, tracklet stitching, review UI: IN PROGRESS. roster.csv exists (21 players, one goalkeeper, git-ignored). tracklet_stitch.py done, first pass (see Phase 5 findings). Roster-based identity assignment (jersey anchors) and the review UI are NOT STARTED.
 8. Stats database and coaching tips: NOT STARTED
 
 ## Commands
@@ -100,6 +109,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
 - Place pitch anchors: pitch_anchor_ui.py --run <run> (local browser UI; writes pitch_anchors.local.json)
+- Stitch tracklets: tracklet_stitch.py --run <run> [--montage] (needs tracklet_roles.csv, tracklet_colors.csv; writes tracklet_stitch.csv)
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
@@ -107,4 +117,5 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 2. DONE, with caveats: role_label.py hand-check completed on both clips (see Phase 2 findings). 65 to 73% accuracy, capped by tracklet ID fragmentation rather than the color model. Not retuned: per-role sample sizes are too small to trust a parameter change. Revisit after tracklet stitching (step 7) or a larger labeled set.
 3. DONE for both clips: clipB has 4 anchors (130s, 180.1s, 197s, 270s), all cross-checking within 0.5 to 5.05 m. clipA has 6 anchors (4s, 66s, 96s, 125s, 156s, 220s); its calibration is accepted with a known, measured limitation (3 to 60+ m error depending on distance from an anchor, versus clipB's much tighter fit) rather than fixed further - see Phase 3 findings for why. `tracklet_pitch_xy.csv.gz` in both data/clipA and data/clipB is ready to use.
 4. DONE, first pass: 60 s hand-labeled on clipA (150 to 210 s) with event_label.py and scored - see Phase 4 findings. Possession scores reasonably (56 to 69%), touch is weak (21 to 33%), turnover/pass samples are too small (1 and 0 true events) to say much. A threshold-fix hypothesis (extend the same-player merge guard to turnovers) was tried and reverted - it broke the one real turnover in this sample. Not retuned: this single window is too small to trust a parameter change, same caution as Phase 2's role thresholds. A larger labeled sample (more windows, ideally on clipB too) would be needed before tuning is worthwhile.
-5. STOP POINT REACHED (owner's limit was step 6). Step 7 (identity, roster, review UI) needs roster.csv, which does not exist, plus jersey anchors. Do not start it without the owner.
+5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
+6. IN PROGRESS: step 7. roster.csv done (owner-provided). tracklet_stitch.py done, first pass, real but partial improvement (see Phase 5 findings) - tracklets-per-player 1.0 to about 2 to 3, not fully solved. NEEDS THE OWNER next: jersey-anchor labeling (recognizing players by eye in sampled crops, since jersey numbers are not OCR-legible) to enable roster-based identity assignment, the second piece of step 7. The review UI (third piece) has not been started.
