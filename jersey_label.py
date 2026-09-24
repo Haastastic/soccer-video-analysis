@@ -52,7 +52,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import ZoomView, cache_stride, read_frames, require_under_data
+from sv_common import PERSON, Cache, ZoomView, cache_stride, read_frames, require_under_data
 
 WINDOW = "jersey label"
 ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
@@ -76,8 +76,28 @@ def earlier_hints(run: Path, tr: pd.DataFrame) -> dict:
     path = run / "identity_rows.csv.gz"
     if not path.exists() or "det_row" not in tr:
         return {}
-    ids = pd.read_csv(path, usecols=["det_row", "jersey"])
-    n = tr.merge(ids, on="det_row").groupby(["player_id", "jersey"]).size()
+    ids = pd.read_csv(path, usecols=["det_row", "jersey", "person_floor"])
+    # det_row numbers person detections at one confidence floor. If these tracks were built with another floor,
+    # the same number is a different detection: every overlapping row must land on the same frame and on a box
+    # that overlaps the tracked one (the frame alone is not enough: neighbouring numbers share a frame).
+    cache = Cache(run / "cache")
+    floor = float(ids.person_floor.iloc[0])
+    persons = cache.det[(cache.det.cls == PERSON) & (cache.det.conf >= floor)].reset_index(drop=True)
+    m = tr[["det_row", "ci", "x1", "y1", "x2", "y2"]].merge(ids[["det_row"]], on="det_row")
+    m = m[m.det_row < len(persons)]
+    if len(m):
+        d = persons.iloc[m.det_row.to_numpy()]
+        iw = (np.minimum(m.x2.to_numpy(), d.x2.to_numpy()) - np.maximum(m.x1.to_numpy(), d.x1.to_numpy())).clip(0)
+        ih = (np.minimum(m.y2.to_numpy(), d.y2.to_numpy()) - np.maximum(m.y1.to_numpy(), d.y1.to_numpy())).clip(0)
+        area = lambda b: (b.x2.to_numpy() - b.x1.to_numpy()) * (b.y2.to_numpy() - b.y1.to_numpy())  # noqa: E731
+        iou = iw * ih / (area(m) + area(d) - iw * ih + 1e-9)
+        aligned = (d.ci.to_numpy() == m.ci.to_numpy()) & (iou > 0.5)
+    if not len(m):
+        return {}  # no earlier-labeled detections in these tracklets
+    if aligned.mean() < 0.95:
+        print(f"WARNING: {path.name} does not line up with these tracklets (different --person-floor?). No hints.")
+        return {}
+    n = tr.merge(ids[["det_row", "jersey"]], on="det_row").groupby(["player_id", "jersey"]).size()
     hints = {}
     for pid, g in n.groupby(level=0):
         top = g.droplevel(0)
