@@ -19,13 +19,15 @@ Every crop starts as person A. When the box is on someone else in some crops, gr
   p                one person the whole time (resets any grouping)
   x                two or more people, but too hard to group
   s                skip, cannot tell
-  m                more crops, if they do not all fit on one page
   b                back one tracklet (undo the last label)
   q                save and quit
-  mouse wheel      zoom in or out, centered on the cursor
-  right click      pan the zoomed view to that spot
-  r                reset zoom (zoom stays set across tracklets otherwise, since the crop grid is the same). The
-                   window grows with zoom up to the screen size, then magnifies inside it
+  mouse wheel      zoom in or out; the point under the cursor stays put
+  right click      center the view on that spot
+  scroll bars      appear when part of the grid is hidden (zoomed past the screen): drag, or click to jump
+  r                reset zoom (zoom stays set across tracklets otherwise, since the crop grid is the same)
+
+All 32 crops are shown at once, in a grid sized to the screen (no paging). The window grows with zoom up to the
+screen size; past that, scroll bars appear.
 
 Crops are in time order, left to right then top to bottom, with the time in seconds on each; the green box is
 the tracked person, the colored frame and letter are the person group. A swap usually shows as a change of kit,
@@ -57,15 +59,23 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, ZoomView, cache_stride, read_frames, require_under_data, screen_size
+from sv_common import (
+    TILE_H,
+    TILE_W,
+    Cache,
+    ZoomView,
+    add_footer,
+    cache_stride,
+    crop_tile,
+    grid_cols,
+    read_frames,
+    require_under_data,
+    tile_grid,
+)
 
 WINDOW = "track purity"
-CROP_W, CROP_H = 220, 320
-ROWS = 2
-N_CROPS = 32  # sampled per tracklet
-# as many columns as fit the screen (an ultrawide shows all 32 crops at once), 4 to 16
-COLS = int(np.clip(screen_size()[0] // CROP_W, 4, N_CROPS // ROWS))
-PER_PAGE = COLS * ROWS
+CROP_W, CROP_H = TILE_W, TILE_H
+N_CROPS = 32  # sampled per tracklet, all shown at once in a grid sized to the screen (no paging)
 TRUTH_COLS = ["item", "config", "track_id", "duration_s", "verdict", "grouped"]
 CROP_COLS = ["item", "config", "track_id", "crop", "ci", "det_row", "group"]
 GROUPS = "ABCDEFGH"  # owner: some tracklets needed more than 4 people
@@ -116,17 +126,6 @@ def sample_items(run, sweep: str, configs: list, n: int, min_s: float, seed: int
     return items
 
 
-def crop(img, row) -> np.ndarray:
-    cx, cy = int((row["x1"] + row["x2"]) / 2), int(row["y2"])
-    x0 = int(np.clip(cx - CROP_W / 2, 0, img.shape[1] - CROP_W))
-    y0 = int(np.clip(cy - CROP_H * 0.8, 0, img.shape[0] - CROP_H))
-    out = img[y0 : y0 + CROP_H, x0 : x0 + CROP_W].copy()
-    p1 = (int(row["x1"]) - x0, int(row["y1"]) - y0)
-    p2 = (int(row["x2"]) - x0, int(row["y2"]) - y0)
-    cv2.rectangle(out, p1, p2, (0, 255, 0), 2)
-    return out
-
-
 def add_det_rows(run, sweep: str, items: list) -> bool:
     """Fill det_row into samples drawn before grouping existed (same ci and track, so the same detection)."""
     missing = [it for it in items if "det_row" not in it["rows"][0]]
@@ -167,38 +166,27 @@ def toggle_unknown(groups: list, j: int) -> None:
     groups[j] = groups[j].upper() if groups[j].islower() else groups[j].lower()
 
 
-def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, groups, note="") -> np.ndarray:
+def render(tiles, item, index, total, label, zv: ZoomView, fps_cache, groups, note="") -> np.ndarray:
     rows = item["rows"]
-    n_pages = max(1, -(-len(rows) // PER_PAGE))
-    page_rows = list(range(page * PER_PAGE, min((page + 1) * PER_PAGE, len(rows))))
-    blank = np.zeros((CROP_H, CROP_W, 3), np.uint8)
     cells = []
-    for k in range(PER_PAGE):
-        if k < len(page_rows):
-            j = page_rows[k]
-            t = tiles[j].copy()
-            txt = f"{(rows[j]['ci'] - rows[0]['ci']) / fps_cache:.1f}s"
-            cv2.putText(t, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-            color = GROUP_COLOR[shown(groups[j])]
-            cv2.rectangle(t, (0, 0), (CROP_W - 1, CROP_H - 1), color, 4)
-            cv2.putText(t, shown(groups[j]), (CROP_W - 34, 34), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3, cv2.LINE_AA)
-            cells.append(t)
-        else:
-            cells.append(blank)
-    show = zv.apply(np.vstack([np.hstack(cells[r * COLS : (r + 1) * COLS]) for r in range(ROWS)]))
-    sh, sw = show.shape[:2]
+    for j, tile in enumerate(tiles):
+        t = tile.copy()
+        txt = f"{(rows[j]['ci'] - rows[0]['ci']) / fps_cache:.1f}s"
+        cv2.putText(t, txt, (5, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        color = GROUP_COLOR[shown(groups[j])]
+        cv2.rectangle(t, (0, 0), (CROP_W - 1, CROP_H - 1), color, 4)
+        cv2.putText(t, shown(groups[j]), (CROP_W - 34, 34), cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3, cv2.LINE_AA)
+        cells.append(t)
+    show = zv.apply(tile_grid(cells, grid_cols(len(cells))))
     status = f" [{label}]" if label else ""
     visible = [shown(g) for g in groups]
     counts = " ".join(f"{g}:{visible.count(g)}" for g in GROUPS + "?" if visible.count(g))
-    pages = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
     text = (
-        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{pages}{zv.label()}{note}   "
+        f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{zv.label()}{note}   "
         "click cycle person | shift+click swap here | ctrl+click ? | Enter save | p one person | "
-        "x two+ ungrouped | s skip | b back | wheel zoom | right-click pan | r reset | q quit"
+        "x two+ ungrouped | s skip | b back | wheel zoom | right-click pan | drag scroll bars | r reset | q quit"
     )
-    cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
-    cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-    return show
+    return add_footer(show, text)
 
 
 def check_configs(run, sweep: str, items: list) -> None:
@@ -265,7 +253,7 @@ def cmd_label(args) -> None:
     tiles = {i: [None] * len(it["rows"]) for i, it in enumerate(items)}
     for f, img in read_frames(args.run / "clip.mp4", list(by_frame)):
         for i, j in by_frame[f]:
-            tiles[i][j] = crop(img, items[i]["rows"][j])
+            tiles[i][j] = crop_tile(img, items[i]["rows"][j])
     for i in tiles:
         tiles[i] = [t if t is not None else np.zeros((CROP_H, CROP_W, 3), np.uint8) for t in tiles[i]]
 
@@ -276,7 +264,7 @@ def cmd_label(args) -> None:
         todo = [i for i in range(len(items)) if i not in labels]
         todo += [i for i in range(len(items)) if labels.get(i) == "mixed" and i not in grouped]
     zv = ZoomView()
-    state = dict(pos=0, page=0)
+    state = dict(pos=0)
     history = []  # (position in todo, previous label, previous grouped flag, previous groups), for b
 
     def cur_groups():
@@ -289,10 +277,11 @@ def cmd_label(args) -> None:
         if zv.on_mouse(event, mx, my, flags) or event != cv2.EVENT_LBUTTONDOWN or state["pos"] >= len(todo):
             return
         cx, cy = zv.to_content(mx, my)
-        col, row = int(cx // CROP_W), int(cy // CROP_H)
-        j = state["page"] * PER_PAGE + row * COLS + col
         g = cur_groups()
-        if not (0 <= col < COLS and 0 <= row < ROWS and j < len(g)):
+        cols = grid_cols(len(g))
+        col, row = int(cx // CROP_W), int(cy // CROP_H)
+        j = row * cols + col
+        if not (0 <= col < cols and row >= 0 and j < len(g)):
             return
         if flags & cv2.EVENT_FLAG_SHIFTKEY:
             switch_to_next(g, j)
@@ -310,15 +299,14 @@ def cmd_label(args) -> None:
         save()
         history.append((state["pos"], *before))
         state["confirm"] = None
-        state["pos"], state["page"] = state["pos"] + 1, 0
+        state["pos"] += 1
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(WINDOW, on_mouse)
     try:
         while state["pos"] < len(todo):
             i = todo[state["pos"]]
-            item, g, page = items[i], cur_groups(), state["page"]
-            n_pages = max(1, -(-len(item["rows"]) // PER_PAGE))
+            item, g = items[i], cur_groups()
             # re-queued: marked "two or more" in an earlier session, before grouping existed
             requeued = labels.get(i) == "mixed" and i not in grouped
             note = ""
@@ -326,7 +314,7 @@ def cmd_label(args) -> None:
                 note = "  EARLIER YOU MARKED THIS TWO+. Enter again = one person after all"
             elif requeued:
                 note = "  (earlier: two+, please group it; s keeps it as two+ ungrouped)"
-            show = render(tiles[i], item, state["pos"], len(todo), labels.get(i), zv, page, fps_cache, g, note)
+            show = render(tiles[i], item, state["pos"], len(todo), labels.get(i), zv, fps_cache, g, note)
             cv2.imshow(WINDOW, show)
             key = cv2.waitKey(30) & 0xFF
             if key in (13, 10):  # Enter: save the grouping
@@ -343,11 +331,9 @@ def cmd_label(args) -> None:
                 finish(i, "mixed", False)
             elif key == ord("s"):
                 finish(i, "mixed" if requeued else "skipped", False)  # s never drops an earlier two+ verdict
-            elif key == ord("m"):
-                state["page"] = (page + 1) % n_pages
             elif key == ord("b") and history:
                 pos, prev_label, prev_grouped, prev_groups = history.pop()
-                state["pos"], state["page"] = pos, 0
+                state["pos"] = pos
                 j = todo[pos]
                 for store, prev in ((labels, prev_label), (grouped, prev_grouped), (groups, prev_groups)):
                     if prev is None:

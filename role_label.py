@@ -7,7 +7,8 @@ confidence and flags overlaid. One key per tracklet:
   t   target        o   opponent        f   official        g   goalkeeper        x   other (not a player)
   s   skip, unsure                b   back one tracklet, to undo                q   save and quit
 
-  mouse wheel  zoom in or out on the crops, centered on the cursor    right click  pan    r  reset zoom
+  mouse wheel  zoom, keeping the point under the cursor    right click  center there    r  reset zoom
+  scroll bars  appear when part of the crops is hidden (zoomed past the screen): drag, or click to jump
 
 Progress is saved after every tracklet, so rerunning `label` resumes. Labels go to OUT/role_truth.csv
 (git-ignored under data/). Crops show people: keep them local.
@@ -32,13 +33,25 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import ZoomView, cache_stride, read_frames, require_under_data, sample_rows
+from sv_common import (
+    FOOTER_H,
+    TILE_H,
+    TILE_W,
+    ZoomView,
+    add_footer,
+    cache_stride,
+    crop_tile,
+    grid_cols,
+    read_frames,
+    require_under_data,
+    sample_rows,
+    tile_grid,
+)
 from team_classify import ROLES
 
 WINDOW = "role label"
 MIN_SAMPLE_ROWS = 10  # tracklets shorter than this rarely give a clear crop
-CROP_H = 220
-HEADER_H, FOOTER_H = 22, 22
+HEADER_H = 22
 TRUTH_COLS = ["track_id", "pred_role", "pred_confidence", "player_candidate", "n_rows", "truth_role", "verdict"]
 KEY_ROLE = {ord("t"): "target", ord("o"): "opponent", ord("f"): "official", ord("g"): "goalkeeper", ord("x"): "other"}
 
@@ -137,41 +150,23 @@ class Session:
 
 def render(img_lookup: dict, item: dict, index: int, total: int, label: dict | None, zv: ZoomView) -> np.ndarray:
     tiles = []
-    for ci, x1, y1, x2, y2 in item["crops"]:
+    for ci, x1, y1, x2, y2 in item["crops"]:  # time order; the same tiles and grid as the other review tools
         img = img_lookup.get(ci)
-        if img is None:
-            continue
-        pad = 8
-        x1p, y1p = max(int(x1 - pad), 0), max(int(y1 - pad), 0)
-        x2p, y2p = min(int(x2 + pad), img.shape[1]), min(int(y2 + pad), img.shape[0])
-        crop = img[y1p:y2p, x1p:x2p]
-        if crop.size == 0:
-            continue
-        scale = CROP_H / crop.shape[0]
-        tiles.append(cv2.resize(crop, (max(1, int(crop.shape[1] * scale)), CROP_H), interpolation=cv2.INTER_CUBIC))
-    if not tiles:
-        tiles = [np.zeros((CROP_H, 120, 3), np.uint8)]
-    gap = 6
-    width = sum(t.shape[1] for t in tiles) + gap * (len(tiles) - 1)
-    strip = np.zeros((CROP_H, width, 3), np.uint8)
-    x = 0
-    for t in tiles:
-        strip[:, x : x + t.shape[1]] = t
-        x += t.shape[1] + gap
-    zoomed = zv.apply(strip)  # may be larger than the strip: the window grows with zoom
-    canvas = np.zeros((HEADER_H + zoomed.shape[0] + FOOTER_H, zoomed.shape[1], 3), np.uint8)
-    canvas[HEADER_H : HEADER_H + zoomed.shape[0]] = zoomed
+        box = dict(x1=x1, y1=y1, x2=x2, y2=y2)
+        tiles.append(crop_tile(img, box) if img is not None else np.zeros((TILE_H, TILE_W, 3), np.uint8))
+    zoomed = zv.apply(tile_grid(tiles, grid_cols(len(tiles))))
     status = f"  [{label['verdict']}: {label['truth_role']}]" if label else ""
     flags = f"candidate={item['player_candidate']} sideline={item['sideline_suspect']} rows={item['n_rows']}"
     header = (
         f"{index + 1}/{total}  pred={item['pred_role']} ({item['pred_confidence']:.2f})  {flags}{status}{zv.label()}"
     )
-    cv2.putText(canvas, header, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    top = np.zeros((HEADER_H, zoomed.shape[1], 3), np.uint8)
+    cv2.putText(top, header, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     keys = (
-        "y accept | t target | o opponent | f official | g goalkeeper | x other | s skip | b back | q quit | wheel zoom"
+        "y accept | t target | o opponent | f official | g goalkeeper | x other | s skip | b back | q quit | "
+        "wheel zoom | right-click pan | drag scroll bars | r reset"
     )
-    cv2.putText(canvas, keys, (6, canvas.shape[0] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (255, 255, 255), 1, cv2.LINE_AA)
-    return canvas
+    return add_footer(np.vstack([top, zoomed]), keys)
 
 
 def save_labels(truth_path: Path, items: list, session: "Session", carry_over: pd.DataFrame | None) -> pd.DataFrame:
@@ -230,8 +225,7 @@ def cmd_label(args) -> None:
                 zv.reset()
             elif key == ord("q"):
                 break
-            if changed:
-                zv.reset()  # strips differ in width per tracklet, so a zoom position does not carry over
+            if changed:  # zoom carries over: every tracklet has the same tile grid
                 save_labels(truth_path, items, session, saved)
     finally:
         cv2.destroyAllWindows()
