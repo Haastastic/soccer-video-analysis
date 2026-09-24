@@ -141,12 +141,17 @@ def earlier_hints(run: Path, tr: pd.DataFrame) -> tuple:
 
 
 def sample_rows(d: pd.DataFrame) -> pd.DataFrame:
-    """Up to N_CROPS rows spread over a player's life, with at least MIN_PER_TRACKLET from every tracklet."""
+    """Up to N_CROPS rows spread over a player's life, with at least MIN_PER_TRACKLET from every tracklet.
+
+    With many tracklets the minimum shrinks so the total stays within N_CROPS; every tracklet keeps at least one
+    crop, so only a player with more than N_CROPS tracklets gets more crops than that.
+    """
     sizes = d.groupby("track_id", sort=False).size()
-    alloc = {t: min(n, max(MIN_PER_TRACKLET, round(N_CROPS * n / len(d)))) for t, n in sizes.items()}
-    while sum(alloc.values()) > N_CROPS:  # trim the largest, never below the minimum
+    floor = max(1, min(MIN_PER_TRACKLET, N_CROPS // len(sizes)))
+    alloc = {t: min(n, max(floor, round(N_CROPS * n / len(d)))) for t, n in sizes.items()}
+    while sum(alloc.values()) > N_CROPS:  # trim the largest, never below the floor
         t = max(alloc, key=alloc.get)
-        if alloc[t] <= MIN_PER_TRACKLET:
+        if alloc[t] <= floor:
             break
         alloc[t] -= 1
     parts = []
@@ -494,7 +499,8 @@ def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
     out = out.merge(roster, on="jersey", how="left")
     named_ok = named[named.verdict == "confirmed"]
     ids = pd.concat([confirmed.assign(level="player"), named_ok[["player_id", "jersey"]].assign(level="tracklet")])
-    dupes = confirmed.groupby("jersey").player_id.nunique()
+    # the same jersey on two stitched players (whole-player or a named tracklet): likely an under-merge
+    dupes = ids.groupby("jersey").player_id.nunique()
     conflicts = dupes[dupes > 1]
     seen = set(ids.jersey.astype(int))
     report = {
@@ -508,7 +514,7 @@ def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
         "skipped": int((truth.verdict == "skipped").sum()),
         "roster_players_seen": sorted(seen),
         "roster_players_not_seen": sorted(int(j) for j in roster.jersey if j not in seen),
-        "jersey_conflicts": {int(j): confirmed[confirmed.jersey == j].player_id.tolist() for j in conflicts.index},
+        "jersey_conflicts": {int(j): sorted(set(ids[ids.jersey == j].player_id)) for j in conflicts.index},
         "note": (
             "jersey_conflicts: tracklet_stitch.py probably under-merged those - likely one real player. "
             "mixed_bad_merges: the opposite - tracklet_stitch.py joined two different real people. "
