@@ -12,8 +12,8 @@ config). All configs are shuffled together and the config is never shown, so the
 
 Every crop starts as person A. When the box is on someone else in some crops, group them by person:
 
-  click            cycle that crop's person: A -> B -> ... -> F -> A
-  shift+click      a swap here: this crop and every later one move to the next person
+  click            cycle that crop's person: A -> B -> ... -> H -> A
+  shift+click      a swap here: this crop and every later one move to the next person (after H, back to A)
   ctrl+click       "?" for that crop (cannot tell who it is), ctrl+click again to undo
   Enter            save the grouping: one person if every crop is A (or ?), else two or more
   p                one person the whole time (resets any grouping)
@@ -68,10 +68,10 @@ COLS = int(np.clip(screen_size()[0] // CROP_W, 4, N_CROPS // ROWS))
 PER_PAGE = COLS * ROWS
 TRUTH_COLS = ["item", "config", "track_id", "duration_s", "verdict", "grouped"]
 CROP_COLS = ["item", "config", "track_id", "crop", "ci", "det_row", "group"]
-GROUPS = "ABCDEF"
+GROUPS = "ABCDEFGH"  # owner: some tracklets needed more than 4 people
 GROUP_COLOR = {
     "A": (200, 200, 200), "B": (0, 140, 255), "C": (255, 0, 255), "D": (255, 255, 0), "E": (0, 0, 255),
-    "F": (0, 255, 128), "?": (60, 60, 60),
+    "F": (0, 255, 128), "G": (255, 128, 0), "H": (128, 0, 128), "?": (60, 60, 60),
 }  # fmt: skip
 
 
@@ -141,8 +141,12 @@ def add_det_rows(run, sweep: str, items: list) -> bool:
 
 
 def switch_to_next(groups: list, j: int) -> None:
-    """A swap at crop j: j and every later crop move to the person after j's (unknown crops stay unknown)."""
-    nxt = GROUPS[min(GROUPS.index(groups[j].upper()) + 1, len(GROUPS) - 1)]
+    """A swap at crop j: j and every later crop move to the person after j's (unknown crops stay unknown).
+
+    After the last letter it wraps to A, the same as a click cycles (owner request); A again also fits a box that
+    returns to the first person.
+    """
+    nxt = GROUPS[(GROUPS.index(groups[j].upper()) + 1) % len(GROUPS)]
     for k in range(j, len(groups)):
         if groups[k] in GROUPS:
             groups[k] = nxt
@@ -187,8 +191,6 @@ def render(tiles, item, index, total, label, zv: ZoomView, page, fps_cache, grou
     visible = [shown(g) for g in groups]
     counts = " ".join(f"{g}:{visible.count(g)}" for g in GROUPS + "?" if visible.count(g))
     pages = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
-    if GROUPS[-1] in groups:
-        counts += f" (max {len(GROUPS)} people: a further swap cannot get its own letter, press x instead)"
     text = (
         f"{index + 1}/{total}  {item['duration_s']:.0f}s tracklet{status}  {counts}{pages}{zv.label()}{note}   "
         "click cycle person | shift+click swap here | ctrl+click ? | Enter save | p one person | "
@@ -268,8 +270,11 @@ def cmd_label(args) -> None:
         tiles[i] = [t if t is not None else np.zeros((CROP_H, CROP_W, 3), np.uint8) for t in tiles[i]]
 
     # unlabeled first, then (once) anything marked "two or more" before grouping existed
-    todo = [i for i in range(len(items)) if i not in labels]
-    todo += [i for i in range(len(items)) if labels.get(i) == "mixed" and i not in grouped]
+    if args.redo:  # re-open finished tracklets with their saved grouping loaded (b restores the saved label)
+        todo = [int(i) for i in args.redo.split(",")]
+    else:
+        todo = [i for i in range(len(items)) if i not in labels]
+        todo += [i for i in range(len(items)) if labels.get(i) == "mixed" and i not in grouped]
     zv = ZoomView()
     state = dict(pos=0, page=0)
     history = []  # (position in todo, previous label, previous grouped flag, previous groups), for b
@@ -453,6 +458,7 @@ def main() -> None:
     lab.add_argument("--n", type=int, default=25, help="tracklets per config")
     lab.add_argument("--min-s", type=float, default=2.0, help="skip tracklets shorter than this")
     lab.add_argument("--seed", type=int, default=0)
+    lab.add_argument("--redo", help="comma list of item numbers to re-open with their saved grouping")
     lab.set_defaults(fn=cmd_label)
     sc = sub.add_parser("score", help="purity per config")
     sc.add_argument("--run", required=True, type=require_under_data)
