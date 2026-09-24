@@ -36,8 +36,8 @@ def main() -> None:
     ap.add_argument("--start", default=None)
     ap.add_argument("--duration", type=float, default=None)
     ap.add_argument("--model", default="yolo11m.pt")
-    ap.add_argument("--grid", choices=["quick", "full", "wide"], default="quick")
-    ap.add_argument("--fps-list", default="10,15")
+    ap.add_argument("--grid", choices=["chosen", "quick", "full", "wide"], default="chosen")
+    ap.add_argument("--fps-list", default=None, help="replay rates; default depends on --grid, see replay_trackers.py")
     ap.add_argument("--trackers", default="botsort", help="comma list, see replay_trackers.py")
     ap.add_argument("--redetect", action="store_true", help="rebuild the cache even if it exists")
     ap.add_argument("--share-dir", type=Path, default=None)
@@ -74,8 +74,7 @@ def main() -> None:
             out,
             "--grid",
             args.grid,
-            "--fps-list",
-            args.fps_list,
+            *(["--fps-list", args.fps_list] if args.fps_list else []),
             "--trackers",
             args.trackers,
         ],

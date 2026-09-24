@@ -21,7 +21,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 ## Decisions so far
 - Chose the full-team automated pipeline, with a human review layer and roster constraints for identity.
 - Detection: Ultralytics YOLO (yolo11m) at 1920 px, confidence floor 0.05, cached once.
-- Tracking: never rely on raw tracker IDs for identity. Replay trackers offline, then stitch tracklets (planned).
+- Tracking: never rely on raw tracker IDs for identity. Replay trackers offline, then stitch tracklets. Config in use (2026-09-24): box-only BoT-SORT, 15 fps, high/new 0.7, buffer 1 s, match 0.95 (replay_trackers.py CHOSEN, --grid chosen, the default), chosen by blind owner purity labels (Phase 6).
 - Ball: link candidates over time (ball_link.py). Fine-tune on hand-labeled frames later.
 - Roster is a closed set of 21 players (one goalkeeper). Identity assignment uses roster constraints plus manual anchors.
 
@@ -119,22 +119,23 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - A TRAP HIT AND CAUGHT: scoring every sweep config against the clipA crop groups (det_row pairs: different-person pairs sharing a track, consecutive same-person pairs split) ranked stock ReID p0.2 and veto 0.4 with match 0.8 far ahead. Their blind clipB round put both last. Cause: the labeled pairs only come from tracklets of the sampled configs, so sampled configs pay for all their swaps while any other config pays only for swaps inside those same tracklets. Use that cross-scoring to shortlist, never to pick; pick only on a fresh blind sample.
 - DECISION: box-only BoT-SORT, 15 fps, high/new 0.7, buffer 1 s, match 0.95 (strict sweep config 8 = reid sweep config 7). Best or tied-best on both clips, no appearance model needed. Appearance (generic ReID) is dropped: it separates teams, not teammates.
 - What is left: the remaining swaps are almost all in continuous tracking (1 of 13 and 1 of 5 at gaps), i.e. players in contact or crossing, so no buffer setting fixes them. About 9% of tracked time is still the wrong person. A later fix would split tracklets at contact/crossing moments rather than tune association.
-- NOT YET APPLIED: best_tracklets.csv.gz still holds the old config. Switching means regenerating it, rerunning team_classify.py, pitch_mask.py, pitch_calibrate.py apply, tracklet_stitch.py and events.py, and a new jersey_label.py pass per clip (track IDs change). identity_rows.csv.gz and the purity crop groups stay valid (keyed by det_row).
+- APPLIED 2026-09-24 on both clips: best_tracklets.csv.gz regenerated with --grid chosen (402 tracklets on clipA, 442 on clipB, identical to the labeled sweep config), then pitch_mask.py, team_classify.py classify, pitch_calibrate.py apply (clipA: data/clipA/pitch_anchors.local.json; clipB: the repo-root default), tracklet_stitch.py and events.py rerun. Everything derived from the old tracks is in data/<clip>/archive_wide_tracker/, including owner labels keyed by old track IDs (role_truth.csv, events_truth.csv, jersey_truth.csv): the Phase 2, 4 and 5b hand-checked numbers describe the OLD tracks and cannot be rescored as-is. identity_rows.csv.gz and the purity groups are keyed by det_row and still valid.
+- Jersey labeling must be redone per clip: 71 stitched target/goalkeeper players on clipA (was 69), 66 on clipB (was 54). jersey_label.py now shows the jersey confirmed earlier for the same detections ("earlier: #N", key a accepts after checking the crops) when at least 90% of a player's earlier-labeled detections agree: 25 players on clipA, 16 on clipB.
 - Tracklets 13, 27 and 30 of clipA's purity sample hit the 4-group cap of the first grouping version. REDONE with the 8-group tool (2026-09-24, `--redo 13,27,30`): two current-config tracklets gained swaps (24 to 28 swaps, 9 to 10 at gaps); the box-only and veto configs' numbers did not change, so the pooled comparison stands.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
-2. Offline tracker replay and sweep: replay_trackers.py (done; retuned by blind owner purity labels to buffer 1 s, match 0.95 - see Phase 6 findings; not yet applied to best_tracklets.csv.gz)
+2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
 3. Ball linking: ball_link.py (done; hand-checked on one 60 s window, 97% correct when detected, interpolation weak)
 4. Team classification: team_classify.py (done; hand-checked, 65 to 73% accuracy, capped by tracklet fragmentation, goalkeeper weak)
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (done for both clips - clipB: 4 anchors, 0.5 to 5 m cross-check; clipA: 6 anchors, accepted with a known higher error floor (3 to 60+ m) from noisier camera motion in that clip - see Phase 3 findings)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
-7. Identity assignment with roster, tracklet stitching, review UI: roster.csv, tracklet_stitch.py (retuned against real data) and jersey_label.py all DONE, run on both clips - clipA 26/95 tracklets (11/21 roster players), clipB 16/74 tracklets (9/21 roster players), consistent results (see Phase 5/5b findings). The review UI (third piece) is NOT STARTED, not urgent - jersey_label.py already covers most of that need.
+7. Identity assignment with roster, tracklet stitching, review UI: roster.csv, tracklet_stitch.py and jersey_label.py DONE; identity needs relabeling on both clips after the 2026-09-24 tracker change (Phase 6). Earlier pass results (Phase 5b) describe the old tracks. The review UI (third piece) is NOT STARTED, not urgent.
 8. Stats database and coaching tips: NOT STARTED
 
 ## Commands
 - One command for the current stage:
-  python run_all.py --video <game.mp4> --start HH:MM:SS --duration 300 --out data\clipA --grid wide --share-dir <folder Claude can read>
+  python run_all.py --video <game.mp4> --start HH:MM:SS --duration 300 --out data\clipA --share-dir <folder Claude can read>
 - Individual stages: detect_cache.py, replay_trackers.py, ball_link.py (each has --help)
 - Events: events.py --run <run> [--montage] (needs ball_path.csv, tracklet_roles.csv)
 - Hand-label events: event_label.py label --run <run> --start <s> --duration <s>, then event_label.py score --run <run> (writes events_truth.csv, events_score.json)
@@ -155,4 +156,4 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 4. DONE, first pass: 60 s hand-labeled on clipA (150 to 210 s) with event_label.py and scored - see Phase 4 findings. Possession scores reasonably (56 to 69%), touch is weak (21 to 33%), turnover/pass samples are too small (1 and 0 true events) to say much. A threshold-fix hypothesis (extend the same-player merge guard to turnovers) was tried and reverted - it broke the one real turnover in this sample. Not retuned: this single window is too small to trust a parameter change, same caution as Phase 2's role thresholds. A larger labeled sample (more windows, ideally on clipB too) would be needed before tuning is worthwhile.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
-7. DONE (decision), NOT APPLIED: tracker swap retune (Phase 6). Box-only, buffer 1 s, match 0.95 won blind purity checks on both clips (8.9% wrong-person time vs about 27% before). Applying it regenerates best_tracklets.csv.gz and needs a new jersey_label.py pass per clip: owner's call on when.
+7. DONE, APPLIED 2026-09-24: tracker swap retune (Phase 6). Both clips regenerated downstream. NEXT (owner): jersey_label.py label + apply on clipA and clipB with the new tracks; earlier confirmations are offered as hints.
