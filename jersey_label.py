@@ -27,8 +27,12 @@ tracklets one by one instead of losing the whole player (owner request; most "mi
   click a crop     select its tracklet (click again, or Esc, to deselect)
   with a tracklet selected: digits+Enter / a / n / o / s label THAT tracklet (a uses its own "earlier" jersey),
                    then the next unnamed tracklet is selected; Backspace with nothing typed clears its label
-  x or Enter       (nothing typed, no selection) finish the player: named tracklets keep their labels, the
-                   rest get no identity. Saved as verdict "split". Without any named tracklet, x is "mixed".
+  shift+click      a different person from this crop on: splits the crop's tracklet there into parts (T1a, T1b,
+                   a magenta bar), each named like a tracklet; shift+click the same crop again to undo. Works on
+                   single-tracklet players too (a swap inside one tracklet). Frames between the last crop before
+                   the split and the split crop belong to no part, since the exact switch frame is not known.
+  x or Enter       (nothing typed, no selection) finish the player: named tracklets and parts keep their labels,
+                   the rest get no identity. Saved as verdict "split". With nothing named, x is "mixed".
 
   mouse wheel      zoom in or out; the point under the cursor stays put - point at a jersey back to read it
   right click      center the view on that spot
@@ -38,11 +42,13 @@ tracklets one by one instead of losing the whole player (owner request; most "mi
 Zoom stays where you set it across players (the crop layout is the same for every player). The window grows
 with zoom up to the screen size; past that, scroll bars appear. Progress is saved after every player, so rerunning
 `label` resumes where you stopped. `label --redo-mixed` re-opens the players marked "mixed" to name their
-tracklets. Labels go to OUT/jersey_truth.csv (players) and OUT/jersey_tracklets.csv (named tracklets of "split"
-players), git-ignored under data/. The crops show people: keep them local.
+tracklets. Labels go to OUT/jersey_truth.csv (players) and OUT/jersey_tracklets.csv (named tracklets and parts of
+"split" players, with frame ranges), git-ignored under data/. The crops show people: keep them local.
 
 `apply` joins the labels with tracklet_stitch.csv and roster.csv into OUT/player_identity.csv (one row per
-original track_id; a named tracklet's label overrides its player's) and reports roster coverage plus these worth
+original track_id; a named tracklet's label overrides its player's; a tracklet split at a switch has no single
+identity there, split_at_switch=True) and OUT/identity_segments.csv (the named parts of split tracklets, as frame
+ranges), and reports roster coverage plus these worth
 a second look: the same jersey given to two different stitched player_ids (a sign tracklet_stitch.py
 under-merged them - they are probably one real player), any player_id marked "mixed" (the opposite mistake - it
 over-merged two different real people), any tracklet flagged not-on-roster (a role-classification leak worth
@@ -59,6 +65,7 @@ Example:
 """
 
 import argparse
+import bisect
 import json
 from pathlib import Path
 
@@ -91,9 +98,10 @@ CROP_W, CROP_H = TILE_W, TILE_H
 N_CROPS = 32  # sampled per player, all shown at once
 MIN_PER_TRACKLET = 3  # so a short tracklet in a stitched player still gets enough crops to be named
 TRUTH_COLS = ["player_id", "jersey", "verdict"]
-TRACKLET_COLS = ["track_id", "player_id", "jersey", "verdict"]
+TRACKLET_COLS = ["track_id", "seg", "ci_start", "ci_end", "player_id", "jersey", "verdict"]
 TRACKLET_COLORS = [(255, 200, 0), (0, 200, 255), (255, 0, 200), (0, 255, 160), (160, 120, 255), (0, 128, 255)]
 DIVIDER = (0, 255, 255)  # yellow bar where one tracklet ends and the next begins
+SPLIT_BAR = (255, 0, 255)  # magenta bar where the owner marked a switch to another person inside a tracklet
 SHORT = {"confirmed": "#", "not_on_roster": "not roster", "bench": "bench", "skipped": "skip"}
 
 
@@ -173,12 +181,14 @@ def build_items(run: Path) -> list:
         d = d.reset_index(drop=True)
         rows = sample_rows(d)[["ci", "track_id", "x1", "y1", "x2", "y2"]].to_dict("records")
         tracklets = list(dict.fromkeys(d.track_id))  # in order of first appearance
+        span = d.groupby("track_id").ci.agg(["min", "max"])
         items.append(
             dict(
                 player_id=pid,
                 role=d.role.iloc[0],
                 n_tracklets=len(tracklets),
                 tracklets=tracklets,
+                span={int(t): (int(r["min"]), int(r["max"])) for t, r in span.iterrows()},
                 rows=rows,
                 hint=hints.get(pid),
                 thints={t: thints[t] for t in tracklets if t in thints},
@@ -192,8 +202,10 @@ class Session:
     """Labels for a list of items. Pure logic, no window, so it can be tested.
 
     order: which items to visit, in order (all of them by default; --redo-mixed visits only "mixed" ones).
-    labels: item index -> player-level label. tlabels: track_id -> label of that one tracklet, used when the
-    player is "split". back() restores exactly what an item had before it was labeled in this session.
+    labels: item index -> player-level label.
+    Segments: a tracklet is one segment, or several after the owner marks switch points (splits: track_id ->
+    sorted ci where a different person starts). A segment is keyed (track_id, k), k = 0, 1, ...
+    tlabels: segment -> label, used when the player is "split". back() restores exactly what an item had before.
     """
 
     def __init__(
@@ -206,7 +218,7 @@ class Session:
     ):
         self.items = items
         self.valid_jerseys = set(roster.jersey.astype(int))
-        self.labels, self.tlabels = {}, {}
+        self.labels, self.tlabels, self.splits = {}, {}, {}
         if saved is not None and len(saved):
             by_pid = {r.player_id: r for r in saved.itertuples()}
             for i, it in enumerate(items):
@@ -214,19 +226,26 @@ class Session:
                 if r is not None:
                     jersey = None if pd.isna(r.jersey) else int(r.jersey)
                     self.labels[i] = dict(jersey=jersey, verdict=r.verdict)
-        if saved_tracklets is not None:
-            for r in saved_tracklets.itertuples():
-                self.tlabels[int(r.track_id)] = dict(
-                    jersey=None if pd.isna(r.jersey) else int(r.jersey), verdict=r.verdict
-                )
+        if saved_tracklets is not None and len(saved_tracklets):
+            t = saved_tracklets.copy()
+            if "seg" not in t:  # saved before tracklets could be split
+                t["seg"], t["ci_start"] = 0, np.nan
+            for r in t.itertuples():
+                key = (int(r.track_id), int(r.seg))
+                if r.seg > 0:
+                    self.splits.setdefault(key[0], []).append(int(r.ci_start))
+                if r.verdict != "unnamed":
+                    jersey = None if pd.isna(r.jersey) else int(r.jersey)
+                    self.tlabels[key] = dict(jersey=jersey, verdict=r.verdict)
+            self.splits = {k: sorted(v) for k, v in self.splits.items()}
         if redo_mixed:
             self.order = [i for i in range(len(items)) if self.labels.get(i, {}).get("verdict") == "mixed"]
             self.pos = 0
         else:
             self.order = list(range(len(items)))
             self.pos = next((k for k, i in enumerate(self.order) if i not in self.labels), len(self.order))
-        self.history = []  # (pos, previous player label, previous labels of its tracklets)
-        self.selected = None  # track_id whose label the next key sets, or None for the whole player
+        self.history = []  # (pos, previous player label, previous segment labels, previous splits)
+        self.selected = None  # segment whose label the next key sets, or None for the whole player
 
     @property
     def done(self) -> bool:
@@ -240,12 +259,74 @@ class Session:
     def item(self) -> dict:
         return self.items[self.idx]
 
+    # ---- segments
+
+    def seg_of(self, track_id: int, ci: int) -> tuple:
+        return (track_id, bisect.bisect_right(self.splits.get(track_id, []), ci))
+
+    def segments(self, item: dict | None = None) -> list:
+        item = item or self.item
+        return [(t, k) for t in item["tracklets"] for k in range(len(self.splits.get(t, [])) + 1)]
+
+    def multi(self, item: dict | None = None) -> bool:
+        """More than one segment: tracklet tags, selection and per-segment naming apply."""
+        return len(self.segments(item)) > 1
+
+    def toggle_split(self, row: dict) -> bool:
+        """Shift+click on a crop: a different person from this crop on (again on the same crop: undo the split).
+
+        Not on a tracklet's first crop. The tracklet's segment names are cleared, since its segments change.
+        """
+        tid, ci = int(row["track_id"]), int(row["ci"])
+        first = min(r["ci"] for r in self.item["rows"] if r["track_id"] == tid)
+        if ci == first:
+            return False
+        pts = self.splits.setdefault(tid, [])
+        if ci in pts:
+            pts.remove(ci)
+        else:
+            bisect.insort(pts, ci)
+        if not pts:
+            del self.splits[tid]
+        for key in [k for k in self.tlabels if k[0] == tid]:
+            del self.tlabels[key]
+        self.selected = None
+        return True
+
+    def seg_range(self, item: dict, key: tuple) -> tuple:
+        """Frames (ci) a segment covers. The frames between the last crop before a switch and the crop where the
+        other person shows are in neither segment: the exact switch frame is not known."""
+        tid, k = key
+        pts = self.splits.get(tid, [])
+        first, last = item["span"][tid]
+        start = first if k == 0 else pts[k - 1]
+        if k == len(pts):
+            return start, last
+        before = [r["ci"] for r in item["rows"] if r["track_id"] == tid and r["ci"] < pts[k]]
+        return start, max(before)
+
+    def tag(self, item: dict, key: tuple) -> str:
+        tid, k = key
+        n = item["tracklets"].index(tid) + 1
+        return f"T{n}" + (chr(ord("a") + k) if tid in self.splits else "")
+
+    # ---- labels
+
+    def _snapshot(self) -> tuple:
+        tids = set(self.item["tracklets"])
+        return (
+            self.pos,
+            self.labels.get(self.idx),
+            {k: v for k, v in self.tlabels.items() if k[0] in tids},
+            {t: list(v) for t, v in self.splits.items() if t in tids},
+        )
+
     def _set(self, jersey, verdict) -> None:
-        tids = self.item["tracklets"]
-        self.history.append((self.pos, self.labels.get(self.idx), {t: self.tlabels.get(t) for t in tids}))
-        if verdict != "split":  # a whole-player label replaces any tracklet names
-            for t in tids:
-                self.tlabels.pop(t, None)
+        self.history.append(self._snapshot())
+        if verdict != "split":  # a whole-player label replaces any segment names and switch points
+            tids = set(self.item["tracklets"])
+            self.tlabels = {k: v for k, v in self.tlabels.items() if k[0] not in tids}
+            self.splits = {t: v for t, v in self.splits.items() if t not in tids}
         self.labels[self.idx] = dict(jersey=jersey, verdict=verdict)
         self.pos += 1
         self.selected = None
@@ -260,7 +341,7 @@ class Session:
         self._set(None, "not_on_roster")
 
     def mixed(self) -> None:
-        """Two or more people. Keeps any tracklets named so far (then it is "split"), else plain "mixed"."""
+        """Two or more people. Keeps any segments named so far (then it is "split"), else plain "mixed"."""
         self._set(None, "split" if self.named() else "mixed")
 
     def bench(self) -> None:
@@ -270,19 +351,19 @@ class Session:
         self._set(None, "skipped")
 
     def named(self) -> list:
-        return [t for t in self.item["tracklets"] if t in self.tlabels]
+        return [k for k in self.segments() if k in self.tlabels]
 
-    def select(self, track_id) -> None:
-        self.selected = None if track_id == self.selected else track_id
+    def select(self, key) -> None:
+        self.selected = None if key == self.selected else key
 
     def label_tracklet(self, jersey, verdict) -> bool:
-        """Label the selected tracklet, then select the next unnamed one (or none)."""
+        """Label the selected segment, then select the next unnamed one (or none)."""
         if self.selected is None or (verdict == "confirmed" and jersey not in self.valid_jerseys):
             return False
         self.tlabels[self.selected] = dict(jersey=jersey, verdict=verdict)
-        tids = self.item["tracklets"]
-        k = tids.index(self.selected)
-        self.selected = next((t for t in tids[k + 1 :] + tids[:k] if t not in self.tlabels), None)
+        segs = self.segments()
+        k = segs.index(self.selected)
+        self.selected = next((s for s in segs[k + 1 :] + segs[:k] if s not in self.tlabels), None)
         return True
 
     def clear_tracklet(self) -> None:
@@ -292,33 +373,36 @@ class Session:
     def back(self) -> None:
         if not self.history:
             return
-        pos, prev, prev_t = self.history.pop()
+        pos, prev, prev_t, prev_s = self.history.pop()
         self.pos, self.selected = pos, None
+        tids = set(self.item["tracklets"])
         if prev is None:
             self.labels.pop(self.idx, None)
         else:
             self.labels[self.idx] = prev
-        for t, lab in prev_t.items():
-            if lab is None:
-                self.tlabels.pop(t, None)
-            else:
-                self.tlabels[t] = lab
+        self.tlabels = {k: v for k, v in self.tlabels.items() if k[0] not in tids} | prev_t
+        self.splits = {t: v for t, v in self.splits.items() if t not in tids} | prev_s
 
     def table(self) -> pd.DataFrame:
         rows = [{"player_id": self.items[i]["player_id"], **lab} for i, lab in sorted(self.labels.items())]
         return pd.DataFrame(rows, columns=TRUTH_COLS)
 
     def tracklet_table(self) -> pd.DataFrame:
-        """Named tracklets of players saved as "split" (names on an unfinished player are not saved)."""
+        """Segments of players saved as "split": named ones, plus unnamed segments of split tracklets (so the switch
+        points survive a reload). Names on an unfinished player are not saved."""
         rows = []
         for i, lab in sorted(self.labels.items()):
-            if lab["verdict"] == "split":
-                it = self.items[i]
-                rows += [
-                    dict(track_id=t, player_id=it["player_id"], **self.tlabels[t])
-                    for t in it["tracklets"]
-                    if t in self.tlabels
-                ]
+            if lab["verdict"] != "split":
+                continue
+            it = self.items[i]
+            for key in self.segments(it):
+                if key not in self.tlabels and key[0] not in self.splits:
+                    continue
+                start, end = self.seg_range(it, key)
+                lab_k = self.tlabels.get(key, dict(jersey=None, verdict="unnamed"))
+                rows.append(
+                    dict(track_id=key[0], seg=key[1], ci_start=start, ci_end=end, player_id=it["player_id"], **lab_k)
+                )
         return pd.DataFrame(rows, columns=TRACKLET_COLS)
 
 
@@ -333,30 +417,30 @@ def player_tiles(jpgs: dict, item: dict) -> list:
     return tiles
 
 
-def tracklet_text(k: int, lab: dict | None) -> str:
+def segment_text(tag: str, lab: dict | None) -> str:
     if not lab:
-        return f"T{k + 1}"
-    return f"T{k + 1} {SHORT[lab['verdict']]}{lab['jersey'] if lab['verdict'] == 'confirmed' else ''}"
+        return tag
+    return f"{tag} {SHORT[lab['verdict']]}{lab['jersey'] if lab['verdict'] == 'confirmed' else ''}"
 
 
 def mark_tracklets(tiles: list, item: dict, session: "Session") -> list:
-    """Tracklet tag, frame color and a divider where the tracklet changes (only for stitched players)."""
-    if item["n_tracklets"] < 2:
+    """Segment tag, frame color, and bars where the tracklet changes (yellow) or a switch was marked (magenta)."""
+    if not session.multi(item):
         return tiles
     out, prev = [], None
     for tile, row in zip(tiles, item["rows"], strict=True):
         t = tile.copy()
-        k = item["tracklets"].index(row["track_id"])
-        color = TRACKLET_COLORS[k % len(TRACKLET_COLORS)]
-        sel = row["track_id"] == session.selected
+        key = session.seg_of(row["track_id"], row["ci"])
+        color = TRACKLET_COLORS[item["tracklets"].index(key[0]) % len(TRACKLET_COLORS)]
+        sel = key == session.selected
         cv2.rectangle(t, (0, 0), (CROP_W - 1, CROP_H - 1), (255, 255, 255) if sel else color, 8 if sel else 3)
-        if prev is not None and row["track_id"] != prev:
-            cv2.rectangle(t, (0, 0), (7, CROP_H - 1), DIVIDER, -1)
-        text = tracklet_text(k, session.tlabels.get(row["track_id"]))
+        if prev is not None and key != prev:
+            cv2.rectangle(t, (0, 0), (7, CROP_H - 1), DIVIDER if key[0] != prev[0] else SPLIT_BAR, -1)
+        text = segment_text(session.tag(item, key), session.tlabels.get(key))
         cv2.putText(t, text, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(t, text, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
         out.append(t)
-        prev = row["track_id"]
+        prev = key
     return out
 
 
@@ -367,20 +451,22 @@ def render(tiles: list, session: "Session", total: int, typed: str, zv: ZoomView
     typed_txt = f"  typing: {typed}" if typed else ""
     header = f"{session.pos + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
     if session.selected is not None:
-        k = item["tracklets"].index(session.selected)
-        hint = item["thints"].get(session.selected)
-        header += f"  T{k + 1} selected" + (f", earlier: #{hint[0]} (a = accept)" if hint else "")
-        keys = "T: digits+Enter / a / n / o / s label this tracklet | Backspace clear | Esc or click deselect"
+        tid = session.selected[0]
+        hint = item["thints"].get(tid) if tid not in session.splits else None  # a split tracklet's hint is moot
+        header += f"  {session.tag(item, session.selected)} selected" + (
+            f", earlier: #{hint[0]} (a = accept)" if hint else ""
+        )
+        keys = "digits+Enter / a / n / o / s label this part | Backspace clear | Esc or click deselect"
     else:
         if item.get("hint"):
             header += f"  earlier: #{item['hint'][0]} (a = accept)"
         named = len(session.named())
         if named:
-            header += f"  {named}/{item['n_tracklets']} tracklets named: x or Enter finishes as split"
+            header += f"  {named}/{len(session.segments())} parts named: x or Enter finishes as split"
         keys = (
             "digits+Enter=jersey | n not on roster | x mixed (2 people) | o bench/sub (bib) | s skip | "
-            + ("click a crop to name its tracklet | " if item["n_tracklets"] > 1 else "")
-            + "b back | wheel zoom | right-click pan | drag scroll bars | r reset | q quit"
+            + ("click a crop to name its part | " if session.multi() else "")
+            + "shift+click where another person starts | b back | wheel zoom | right-click pan | r reset | q quit"
         )
     return add_footer(show, f"{header}{status}{typed_txt}{zv.label()}   {keys}")
 
@@ -416,14 +502,17 @@ def cmd_label(args) -> None:
         if zv.on_mouse(event, mx, my, flags) or event != cv2.EVENT_LBUTTONDOWN or session.done:
             return
         item = session.item
-        if item["n_tracklets"] < 2:
-            return
         cx, cy = zv.to_content(mx, my)
         cols = grid_cols(len(item["rows"]))
         col, row = int(cx // CROP_W), int(cy // CROP_H)
         j = row * cols + col
-        if 0 <= col < cols and row >= 0 and j < len(item["rows"]):
-            session.select(item["rows"][j]["track_id"])
+        if not (0 <= col < cols and row >= 0 and j < len(item["rows"])):
+            return
+        r = item["rows"][j]
+        if flags & cv2.EVENT_FLAG_SHIFTKEY:
+            session.toggle_split(r)
+        elif session.multi():
+            session.select(session.seg_of(r["track_id"], r["ci"]))
 
     cv2.setMouseCallback(WINDOW, on_mouse)
     typed = ""
@@ -455,7 +544,8 @@ def cmd_label(args) -> None:
             elif key == ord("r"):
                 zv.reset()
             elif key == ord("a"):
-                hint = item["thints"].get(session.selected) if sel else item.get("hint")
+                tid = session.selected[0] if sel else None
+                hint = (item["thints"].get(tid) if tid not in session.splits else None) if sel else item.get("hint")
                 if hint:
                     _ = session.label_tracklet(hint[0], "confirmed") if sel else session.confirm(hint[0])
                 typed = ""
@@ -479,27 +569,32 @@ def cmd_label(args) -> None:
     finally:
         cv2.destroyAllWindows()
         save()
-    print(
-        f"Saved {len(session.labels)} player labels to {truth_path}, named tracklets to {tracklet_path}. Run `apply`."
-    )
+    print(f"Saved {len(session.labels)} player labels to {truth_path}, named parts to {tracklet_path}. Run `apply`.")
 
 
 def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
+    """player_identity.csv (one row per tracklet) and identity_segments.csv (frame ranges of split tracklets)."""
     truth = pd.read_csv(run / "jersey_truth.csv")
     stitch = pd.read_csv(run / "tracklet_stitch.csv")
     tpath = run / "jersey_tracklets.csv"
     named = pd.read_csv(tpath) if tpath.exists() else pd.DataFrame(columns=TRACKLET_COLS)
+    if "seg" not in named:  # saved before tracklets could be split
+        named["seg"], named["ci_start"], named["ci_end"] = 0, np.nan, np.nan
+    split_tids = set(named[named.seg > 0].track_id)
     confirmed = truth[truth.verdict == "confirmed"][["player_id", "jersey"]]
     out = stitch.merge(confirmed, on="player_id", how="left")
-    # a named tracklet (of a "split" player) overrides its player's label: its jersey, or no identity
-    tl = named.set_index("track_id")
-    has = out.track_id.isin(tl.index)
-    tl_jersey = tl.jersey.where(tl.verdict == "confirmed")
-    out.loc[has, "jersey"] = out.loc[has, "track_id"].map(tl_jersey)
+    # a named tracklet (of a "split" player) overrides its player's label: its jersey, or no identity. A tracklet
+    # split at a switch point has no single identity: its parts are in identity_segments.csv instead.
+    whole = named[~named.track_id.isin(split_tids)].set_index("track_id")
+    has = out.track_id.isin(whole.index) | out.track_id.isin(split_tids)
+    out.loc[has, "jersey"] = out.loc[has, "track_id"].map(whole.jersey.where(whole.verdict == "confirmed"))
+    out["split_at_switch"] = out.track_id.isin(split_tids)
     out = out.merge(roster, on="jersey", how="left")
+    segs = named[named.track_id.isin(split_tids) & (named.verdict == "confirmed")]
+    segs = segs[["track_id", "seg", "ci_start", "ci_end", "player_id", "jersey"]].merge(roster, on="jersey", how="left")
     named_ok = named[named.verdict == "confirmed"]
-    ids = pd.concat([confirmed.assign(level="player"), named_ok[["player_id", "jersey"]].assign(level="tracklet")])
-    # the same jersey on two stitched players (whole-player or a named tracklet): likely an under-merge
+    ids = pd.concat([confirmed, named_ok[["player_id", "jersey"]]])
+    # the same jersey on two stitched players (whole-player or a named part): likely an under-merge
     dupes = ids.groupby("jersey").player_id.nunique()
     conflicts = dupes[dupes > 1]
     seen = set(ids.jersey.astype(int))
@@ -507,7 +602,8 @@ def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
         "target_goalkeeper_player_ids": int(stitch[stitch.role.isin(ROSTER_ROLES)].player_id.nunique()),
         "identified": int(confirmed.player_id.nunique()),
         "split_players": int((truth.verdict == "split").sum()),
-        "tracklets_named_in_split_players": int(len(named_ok)),
+        "parts_named_in_split_players": int(len(named_ok)),
+        "tracklets_split_at_a_switch": len(split_tids),
         "not_on_roster": int((truth.verdict == "not_on_roster").sum() + (named.verdict == "not_on_roster").sum()),
         "mixed_bad_merges": truth[truth.verdict == "mixed"].player_id.tolist(),
         "bench_or_sub": truth[truth.verdict == "bench"].player_id.tolist(),
@@ -518,19 +614,22 @@ def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
         "note": (
             "jersey_conflicts: tracklet_stitch.py probably under-merged those - likely one real player. "
             "mixed_bad_merges: the opposite - tracklet_stitch.py joined two different real people. "
-            "split_players: mixed players whose tracklets were named one by one; unnamed ones get no identity. "
+            "split_players: mixed players whose tracklets (or parts of a tracklet, split where another person "
+            "starts) were named one by one; unnamed ones get no identity. Split tracklets' parts are in "
+            "identity_segments.csv (frame ranges in ci); frames around a switch belong to no part. "
             "bench_or_sub: a substitute/bibbed player that should have failed the on-pitch check upstream but "
             "didn't - feedback for pitch_mask.py/team_classify.py, not tracklet_stitch.py. All get no identity "
-            "in the output except named tracklets."
+            "in the output except named tracklets and parts."
         ),
     }
-    return out, report
+    return out, segs, report
 
 
 def cmd_apply(args) -> None:
     roster = pd.read_csv(ROSTER_FILE)
-    out, report = apply_identity(args.run, roster)
+    out, segs, report = apply_identity(args.run, roster)
     out.to_csv(args.run / "player_identity.csv", index=False)
+    segs.to_csv(args.run / "identity_segments.csv", index=False)
     (args.run / "player_identity_report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
