@@ -209,6 +209,10 @@ def run_config(cache: Cache, persons: pd.DataFrame, cfg: dict, fps_target: float
 
 # The config the "wide" grid picked (lowest proxy score). Kept as the reference row in the strict and reid grids.
 WIDE_BEST = dict(track_high_thresh=0.7, new_track_thresh=0.7, buffer_s=30.0, match_thresh=0.95)
+# The config in use, chosen by the owner's blind purity labels on both clips (CLAUDE.md Phase 6): box-only BoT-SORT
+# at 15 fps with a 1 s buffer. 8.9% of tracked time on the wrong person, versus about 27% for WIDE_BEST.
+CHOSEN = dict(track_high_thresh=0.7, new_track_thresh=0.7, buffer_s=1.0, match_thresh=0.95)
+CHOSEN_FPS = "15"
 
 
 def identity_truth(run, person_floor: float, persons: pd.DataFrame) -> pd.DataFrame | None:
@@ -284,6 +288,8 @@ def make_grid(kind: str, vetoes=(0.4, 0.5, 0.6)):
     cannot. These grids go the other way and are scored on identity labels, not only on ID counts.
     """
     base = dict(track_high_thresh=0.25, new_track_thresh=0.25, buffer_s=6.0, match_thresh=0.8)
+    if kind == "chosen":
+        return [dict(CHOSEN)]
     if kind == "strict":
         grid = [dict(WIDE_BEST)]
         # Short buffers matter most: 69% of owner-confirmed "mixed" single tracklets had an internal gap of 1 s or
@@ -338,8 +344,15 @@ def make_grid(kind: str, vetoes=(0.4, 0.5, 0.6)):
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, type=require_under_data, help="run folder that contains cache/")
-    ap.add_argument("--grid", choices=["quick", "full", "wide", "strict", "reid", "refind"], default="quick")
-    ap.add_argument("--fps-list", default="10,15", help="replay rates, limited to what the cache supports")
+    ap.add_argument(
+        "--grid",
+        choices=["chosen", "quick", "full", "wide", "strict", "reid", "refind"],
+        default="chosen",
+        help="chosen = the config in use (see CHOSEN); the others are sweeps",
+    )
+    ap.add_argument(
+        "--fps-list", default=None, help=f"replay rates (default {CHOSEN_FPS} for the chosen grid, else 10,15)"
+    )
     ap.add_argument(
         "--trackers",
         default="botsort",
@@ -358,6 +371,8 @@ def main() -> None:
         "--overwrite", action="store_true", help="replace an existing --sweep folder (and any purity labels in it)"
     )
     args = ap.parse_args()
+    if args.fps_list is None:
+        args.fps_list = CHOSEN_FPS if args.grid == "chosen" else "10,15"
 
     cache = Cache(args.run / "cache")
     persons = cache.det[(cache.det.cls == PERSON) & (cache.det.conf >= args.person_floor)]
@@ -446,10 +461,11 @@ def main() -> None:
     res.to_csv(args.run / "sweep_results.csv", index=False)
 
     _, cfg, fps_target, tr, fps = best
+    note = "chosen by blind purity labels (CLAUDE.md Phase 6)" if args.grid == "chosen" else "lowest proxy score"
     # det_row indexes `persons` (reset_index above), not cache.det, so join against persons.
     tr = tr.join(persons[COLOR_COLS], on="det_row")
     tr.to_csv(args.run / "best_tracklets.csv.gz", index=False)
-    (args.run / "best_config.json").write_text(json.dumps(dict(cfg, fps=fps, note="lowest proxy score"), indent=2))
+    (args.run / "best_config.json").write_text(json.dumps(dict(cfg, fps=fps, note=note), indent=2))
 
     top = res.head(5)
     base = res[res.is_phase1_equivalent]

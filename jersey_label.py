@@ -10,6 +10,7 @@ identity plan always called for:
 
   0-9 then Enter   type the jersey number, Enter to confirm (checked against roster.csv)
   Backspace        remove the last typed digit
+  a                accept the "earlier" jersey shown in the status line (after checking the crops)
   n                confident this is NOT a roster player (e.g. a misclassified opponent)
   x                the crops show TWO DIFFERENT people - tracklet_stitch.py over-merged this one
   o                a substitute in a bib/off the pitch - a roster player, but not playing right now
@@ -65,6 +66,26 @@ PAGES = 8  # "more" (m) cycles through this many pages, so up to PER_PLAYER*PAGE
 TRUTH_COLS = ["player_id", "jersey", "verdict"]
 
 
+def earlier_hints(run: Path, tr: pd.DataFrame) -> dict:
+    """player_id -> (jersey, detections) from an earlier jersey_label.py pass, via identity_rows.csv.gz.
+
+    identity_rows.csv.gz (frozen by replay_trackers.py) maps person detections (det_row) to the jersey the owner
+    confirmed, so it survives regenerating the tracklets. A hint is given only when at least 90% of a player's
+    earlier-labeled detections agree on one jersey. It is a suggestion to check by eye, never applied on its own.
+    """
+    path = run / "identity_rows.csv.gz"
+    if not path.exists() or "det_row" not in tr:
+        return {}
+    ids = pd.read_csv(path, usecols=["det_row", "jersey"])
+    n = tr.merge(ids, on="det_row").groupby(["player_id", "jersey"]).size()
+    hints = {}
+    for pid, g in n.groupby(level=0):
+        top = g.droplevel(0)
+        if top.max() >= 0.9 * top.sum():
+            hints[pid] = (int(top.idxmax()), int(top.max()))
+    return hints
+
+
 def build_items(run: Path) -> list:
     """One item per stitched target/goalkeeper player, with up to PER_PLAYER*PAGES sample rows spread over its
     life - shown PER_PLAYER at a time, "more" (m) pages through the rest, for when a jersey number or a clear
@@ -73,13 +94,16 @@ def build_items(run: Path) -> list:
     stitch = stitch[stitch.role.isin(ROSTER_ROLES)]
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
     tr = tr[tr.track_id.isin(stitch.track_id)].merge(stitch, on="track_id").sort_values("ci")
+    hints = earlier_hints(run, tr)
     items = []
     for pid, d in tr.groupby("player_id"):
         d = d.reset_index(drop=True)
         n = min(PER_PLAYER * PAGES, len(d))
         idx = np.linspace(0, len(d) - 1, n).round().astype(int)
         rows = d.iloc[idx][["ci", "track_id", "x1", "y1", "x2", "y2"]].to_dict("records")
-        items.append(dict(player_id=pid, role=d.role.iloc[0], n_tracklets=d.track_id.nunique(), rows=rows))
+        items.append(
+            dict(player_id=pid, role=d.role.iloc[0], n_tracklets=d.track_id.nunique(), rows=rows, hint=hints.get(pid))
+        )
     items.sort(key=lambda it: it["player_id"])
     return items
 
@@ -168,6 +192,8 @@ def render(
         "m more crops | b back | wheel zoom | right-click pan | r reset | q quit"
     )
     header = f"{index + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
+    if item.get("hint"):
+        header += f"  earlier: #{item['hint'][0]} (a = accept)"
     text = f"{header}{status}{typed_txt}{zoom_txt}{page_txt}   {keys}"
     cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
     cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
@@ -217,6 +243,9 @@ def cmd_label(args) -> None:
                 zv.reset()
             elif key == ord("m"):
                 page = (page + 1) % n_pages
+            elif key == ord("a") and item.get("hint"):
+                if session.confirm(item["hint"][0]):
+                    typed, changed, moved = "", True, True
             elif key == ord("n"):
                 session.not_on_roster()
                 typed, changed, moved = "", True, True
