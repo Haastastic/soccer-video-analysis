@@ -282,62 +282,155 @@ def screen_size() -> tuple:
     return max(640, w - 40), max(480, h - 140)
 
 
-class ZoomView:
-    """Cursor-centered zoom for the OpenCV review tools. Every clip review tool should have one.
+TILE_W, TILE_H = 220, 320  # one crop in the crop review tools
+FOOTER_H = 24
+SCROLL_BAR = 14  # scroll bar thickness in window pixels
 
-    Zooming grows the window (owner preference) until it reaches the screen size, then keeps magnifying inside the
-    window, so nothing runs off the screen. Mouse wheel zooms at the cursor, right click pans to a spot, reset()
-    goes back to the full view at its original size. Draw status and key text AFTER apply(), so it stays readable.
-    Tools that need their own left clicks call on_mouse() from their callback and map clicks with to_content().
+
+def crop_tile(img: np.ndarray, box: dict, w: int = TILE_W, h: int = TILE_H) -> np.ndarray:
+    """A fixed-size crop around a person box (feet near the bottom), with the box drawn in green."""
+    cx, fy = int((box["x1"] + box["x2"]) / 2), int(box["y2"])
+    x0 = int(np.clip(cx - w / 2, 0, img.shape[1] - w))
+    y0 = int(np.clip(fy - h * 0.8, 0, img.shape[0] - h))
+    out = img[y0 : y0 + h, x0 : x0 + w].copy()
+    cv2.rectangle(
+        out, (int(box["x1"]) - x0, int(box["y1"]) - y0), (int(box["x2"]) - x0, int(box["y2"]) - y0), (0, 255, 0), 2
+    )
+    return out
+
+
+def grid_cols(n: int, tile_w: int = TILE_W) -> int:
+    """Columns for n tiles: fit the screen width (leaving room for a vertical scroll bar), balanced across rows.
+
+    32 crops on a 5120 px screen give 16 x 2, not 23 + 9.
+    """
+    fit = max(1, (screen_size()[0] - SCROLL_BAR) // tile_w)
+    rows = -(-max(1, n) // fit)
+    return -(-max(1, n) // rows)
+
+
+def tile_grid(tiles: list, cols: int) -> np.ndarray:
+    """Tiles in time order, left to right then top to bottom. Every crop of an item is shown at once (no paging)."""
+    th, tw = tiles[0].shape[:2]
+    rows = -(-len(tiles) // cols)
+    grid = np.zeros((rows * th, cols * tw, 3), np.uint8)
+    for k, t in enumerate(tiles):
+        r, c = divmod(k, cols)
+        grid[r * th : (r + 1) * th, c * tw : (c + 1) * tw] = t
+    return grid
+
+
+def add_footer(img: np.ndarray, text: str) -> np.ndarray:
+    """Status/key line BELOW the image, so it never covers content or the bottom scroll bar."""
+    bar = np.zeros((FOOTER_H, img.shape[1], 3), np.uint8)
+    cv2.putText(bar, text, (6, FOOTER_H - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    return np.vstack([img, bar])
+
+
+class ZoomView:
+    """Zoom and scroll for the OpenCV crop review tools. Every clip review tool should have one (owner rule).
+
+    The window grows with zoom until it reaches the screen size (owner preference). When content is hidden past
+    that, or the content is already bigger than the screen, scroll bars appear on the bottom and right edges:
+    drag a thumb, or click the bar to jump there. Mouse wheel zooms keeping the point under the cursor fixed,
+    right click centers the view on a spot, reset() goes back to 1x at the top left.
+    Tools with their own left clicks call on_mouse() first (it returns True when it used the event, e.g. a click
+    on a scroll bar) and map other clicks with to_content(). Put text in add_footer(), not over the content.
     reserve_h: pixels the caller adds above/below the zoomed content (header, footer), kept on screen too.
     """
 
     STEP = 1.25
     MAX = 8.0
+    BAR = SCROLL_BAR
 
-    def __init__(self, reserve_h: int = 24):
+    def __init__(self, reserve_h: int = FOOTER_H):
         self.max_w, self.max_h = screen_size()
         self.max_h -= reserve_h
         self.zoom = 1.0
-        self.cx = self.cy = None  # view center in content pixels; None = content center
-        self.view = (0.0, 0.0, 1.0, 1.0)  # x0, y0, w, h in content pixels, from the last apply()
-        self.out_size = (1, 1)
+        self.x0 = self.y0 = 0.0  # top left of the view, in content pixels
+        self.content_size = self.out_size = self.area = (1, 1)
+        self.bars = (False, False)
+        self.drag = None  # "h" or "v" while a scroll bar thumb is dragged
 
     def reset(self) -> None:
-        self.zoom, self.cx, self.cy = 1.0, None, None
+        self.zoom, self.x0, self.y0 = 1.0, 0.0, 0.0
+
+    def _view(self) -> tuple:
+        """Visible content size, in content pixels."""
+        return self.area[0] / self.zoom, self.area[1] / self.zoom
 
     def to_content(self, mx: float, my: float) -> tuple:
-        x0, y0, vw, vh = self.view
-        return x0 + mx * vw / self.out_size[0], y0 + my * vh / self.out_size[1]
+        return self.x0 + mx / self.zoom, self.y0 + my / self.zoom
+
+    def _scroll_to(self, bar: str, m: float) -> None:
+        vw, vh = self._view()
+        if bar == "h":
+            self.x0 = m / self.area[0] * self.content_size[0] - vw / 2
+        else:
+            self.y0 = m / self.area[1] * self.content_size[1] - vh / 2
 
     def on_mouse(self, event, mx, my, flags, _param=None) -> bool:
-        """Handle wheel and right click. Returns True if the event was used."""
+        """Handle wheel, right click and scroll bars. Returns True if the event was used."""
         if event == cv2.EVENT_MOUSEWHEEL:
-            self.cx, self.cy = self.to_content(mx, my)
+            px, py = self.to_content(mx, my)
             factor = self.STEP if flags > 0 else 1 / self.STEP
             self.zoom = float(np.clip(self.zoom * factor, 1.0, self.MAX))
+            self.x0, self.y0 = px - mx / self.zoom, py - my / self.zoom  # keep the point under the cursor
             return True
         if event == cv2.EVENT_RBUTTONDOWN:
-            self.cx, self.cy = self.to_content(mx, my)
+            px, py = self.to_content(mx, my)
+            vw, vh = self._view()
+            self.x0, self.y0 = px - vw / 2, py - vh / 2
+            return True
+        hbar, vbar = self.bars
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if hbar and my >= self.area[1] and mx < self.area[0]:
+                self.drag = "h"
+            elif vbar and mx >= self.area[0] and my < self.area[1]:
+                self.drag = "v"
+            else:
+                return mx >= self.area[0] or my >= self.area[1]  # the corner or a bar edge: nothing to click
+            self._scroll_to(self.drag, mx if self.drag == "h" else my)
+            return True
+        if event == cv2.EVENT_MOUSEMOVE and self.drag:
+            self._scroll_to(self.drag, mx if self.drag == "h" else my)
+            return True
+        if event == cv2.EVENT_LBUTTONUP and self.drag:
+            self.drag = None
             return True
         return False
 
     def apply(self, content: np.ndarray) -> np.ndarray:
         h, w = content.shape[:2]
-        # the window grows with zoom up to the screen; past that, the view crops in (and right click pans)
-        out_w = int(round(min(w * self.zoom, max(w, self.max_w))))
-        out_h = int(round(min(h * self.zoom, max(h, self.max_h))))
-        self.out_size = (out_w, out_h)
-        vw, vh = out_w / self.zoom, out_h / self.zoom
-        cx = self.cx if self.cx is not None else w / 2
-        cy = self.cy if self.cy is not None else h / 2
-        x0 = float(np.clip(cx - vw / 2, 0, w - vw))
-        y0 = float(np.clip(cy - vh / 2, 0, h - vh))
-        self.view = (x0, y0, vw, vh)
-        if self.zoom == 1.0:
-            return content.copy()
-        crop = content[int(y0) : int(round(y0 + vh)), int(x0) : int(round(x0 + vw))]
-        return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_CUBIC)
+        self.content_size = (w, h)
+        zw, zh = w * self.zoom, h * self.zoom
+        # scroll bars get their own strips, so they never cover content; the window widens (or heightens) by a
+        # bar's thickness when there is room, and a bar only appears when content is really hidden
+        hbar = vbar = False
+        for _ in range(2):
+            aw = min(zw, self.max_w - (self.BAR if vbar else 0))
+            ah = min(zh, self.max_h - (self.BAR if hbar else 0))
+            hbar, vbar = zw > aw + 0.5, zh > ah + 0.5
+        aw = int(round(min(zw, self.max_w - (self.BAR if vbar else 0))))
+        ah = int(round(min(zh, self.max_h - (self.BAR if hbar else 0))))
+        out_w, out_h = aw + (self.BAR if vbar else 0), ah + (self.BAR if hbar else 0)
+        self.bars, self.area, self.out_size = (hbar, vbar), (aw, ah), (out_w, out_h)
+        vw, vh = self._view()
+        self.x0 = float(np.clip(self.x0, 0, max(0.0, w - vw)))
+        self.y0 = float(np.clip(self.y0, 0, max(0.0, h - vh)))
+        crop = content[int(self.y0) : int(np.ceil(self.y0 + vh)), int(self.x0) : int(np.ceil(self.x0 + vw))]
+        if crop.shape[1] != aw or crop.shape[0] != ah:
+            crop = cv2.resize(crop, (aw, ah), interpolation=cv2.INTER_CUBIC)
+        out = np.full((out_h, out_w, 3), 40, np.uint8)
+        out[:ah, :aw] = crop
+        thumb = (190, 190, 190)
+        if hbar:
+            t0, t1 = int(self.x0 / w * aw), int((self.x0 + vw) / w * aw)
+            cv2.rectangle(out, (t0, ah + 2), (max(t0 + 8, t1), out_h - 3), thumb, -1)
+        if vbar:
+            t0, t1 = int(self.y0 / h * ah), int((self.y0 + vh) / h * ah)
+            cv2.rectangle(out, (aw + 2, t0), (out_w - 3, max(t0 + 8, t1)), thumb, -1)
+        return out
 
     def label(self) -> str:
         return f"  zoom {self.zoom:.1f}x" if self.zoom > 1.0 else ""

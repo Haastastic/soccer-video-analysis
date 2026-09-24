@@ -1,11 +1,12 @@
 """Hand-identify stitched players against the roster, then apply the result to every tracklet.
 
 `label` shows one stitched player at a time (only "target" and "goalkeeper" roles - the roster is one team),
-with up to 4 crops spread across all the tracklets tracklet_stitch.py merged into it. Jersey numbers are not
+with up to 32 crops spread across all the tracklets tracklet_stitch.py merged into it, all shown at once in a
+grid sized to the screen (time order, left to right then top to bottom; no paging). Jersey numbers are not
 readable by plain OCR at this resolution (see CLAUDE.md) - but the owner CAN often read one directly, with zoom,
 when a crop happens to catch the player's back. That is the identification method that actually works in
-practice, more than recognition by build/kit alone, so `m` (more crops) is there specifically to page through
-enough sampled frames to find a number-visible one. This is the "manual anchors" the project's roster-based
+practice, more than recognition by build/kit alone, so many sampled frames are shown at once, to give a good
+chance of a number-visible one. This is the "manual anchors" the project's roster-based
 identity plan always called for:
 
   0-9 then Enter   type the jersey number, Enter to confirm (checked against roster.csv)
@@ -15,16 +16,16 @@ identity plan always called for:
   x                the crops show TWO DIFFERENT people - tracklet_stitch.py over-merged this one
   o                a substitute in a bib/off the pitch - a roster player, but not playing right now
   s                skip, unsure - you do not have to read a printed number, recognizing the player is enough
-  m                more crops: page through further sampled frames for this same player
   b                back one player (undo the last label)
   q                save and quit
 
-  mouse wheel      zoom in or out, centered on the cursor - point at a jersey back to read the number
-  right click      pan the zoomed view to that spot
+  mouse wheel      zoom in or out; the point under the cursor stays put - point at a jersey back to read it
+  right click      center the view on that spot
+  scroll bars      appear when part of the grid is hidden (zoomed past the screen): drag, or click to jump
   r                reset zoom to 1x
 
 Zoom stays where you set it across players (the crop layout is the same for every player). The window grows
-with zoom up to the screen size, then magnifies inside it. Progress is saved after every player, so rerunning
+with zoom up to the screen size; past that, scroll bars appear. Progress is saved after every player, so rerunning
 `label` resumes where you stopped. Labels go to OUT/jersey_truth.csv (git-ignored under data/). The crops show
 people: keep them local.
 
@@ -52,17 +53,29 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import PERSON, Cache, ZoomView, cache_stride, read_frames, require_under_data
+from sv_common import (
+    PERSON,
+    TILE_H,
+    TILE_W,
+    Cache,
+    ZoomView,
+    add_footer,
+    cache_stride,
+    crop_tile,
+    grid_cols,
+    read_frames,
+    require_under_data,
+    tile_grid,
+)
 
 WINDOW = "jersey label"
 ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
 ROSTER_ROLES = ("target", "goalkeeper")  # roster.csv is one team; opponents are never matched against it
-CROP_W, CROP_H = 220, 320
-PER_PLAYER = 4  # crops shown at once
+CROP_W, CROP_H = TILE_W, TILE_H
 # Jersey numbers aren't OCR-legible, but ARE sometimes readable by eye (with zoom) when a back-facing frame
 # happens to be sampled - the owner reported this is the identification method that actually works for them,
-# more than recognition by build/kit. More pages means more chances to catch such a frame for a given player.
-PAGES = 8  # "more" (m) cycles through this many pages, so up to PER_PLAYER*PAGES distinct sampled frames
+# more than recognition by build/kit. More crops means more chances to catch such a frame for a given player.
+N_CROPS = 32  # sampled per player, all shown at once
 TRUTH_COLS = ["player_id", "jersey", "verdict"]
 
 
@@ -107,9 +120,8 @@ def earlier_hints(run: Path, tr: pd.DataFrame) -> dict:
 
 
 def build_items(run: Path) -> list:
-    """One item per stitched target/goalkeeper player, with up to PER_PLAYER*PAGES sample rows spread over its
-    life - shown PER_PLAYER at a time, "more" (m) pages through the rest, for when a jersey number or a clear
-    look at the player isn't visible in the first batch."""
+    """One item per stitched target/goalkeeper player, with up to N_CROPS sample rows spread over its life, all
+    shown at once, for a good chance that one catches the jersey number."""
     stitch = pd.read_csv(run / "tracklet_stitch.csv")
     stitch = stitch[stitch.role.isin(ROSTER_ROLES)]
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
@@ -118,7 +130,7 @@ def build_items(run: Path) -> list:
     items = []
     for pid, d in tr.groupby("player_id"):
         d = d.reset_index(drop=True)
-        n = min(PER_PLAYER * PAGES, len(d))
+        n = min(N_CROPS, len(d))
         idx = np.linspace(0, len(d) - 1, n).round().astype(int)
         rows = d.iloc[idx][["ci", "track_id", "x1", "y1", "x2", "y2"]].to_dict("records")
         items.append(
@@ -180,44 +192,29 @@ class Session:
         return pd.DataFrame(rows, columns=TRUTH_COLS)
 
 
-def render(
-    imgs: dict, item: dict, index: int, total: int, label: dict | None, typed: str, zv: ZoomView, page: int
-) -> np.ndarray:
-    n_pages = max(1, -(-len(item["rows"]) // PER_PLAYER))  # ceil division
-    page_rows = item["rows"][page * PER_PLAYER : (page + 1) * PER_PLAYER]
+def player_tiles(jpgs: dict, item: dict) -> list:
+    """The player's crops in time order (decoded once per player, not on every screen refresh)."""
     tiles = []
-    for row in page_rows:
-        img = imgs.get(row["ci"])
-        if img is None:
-            tiles.append(np.zeros((CROP_H, CROP_W, 3), np.uint8))
-            continue
-        cx, cy = int((row["x1"] + row["x2"]) / 2), int(row["y2"])
-        x0 = int(np.clip(cx - CROP_W / 2, 0, img.shape[1] - CROP_W))
-        y0 = int(np.clip(cy - CROP_H, 0, img.shape[0] - CROP_H))
-        crop = img[y0 : y0 + CROP_H, x0 : x0 + CROP_W].copy()
-        # mark which figure in the crop is the one being identified, since nearby players can appear too
-        bx1, by1 = int(row["x1"]) - x0, int(row["y1"]) - y0
-        bx2, by2 = int(row["x2"]) - x0, int(row["y2"]) - y0
-        cv2.rectangle(crop, (bx1, by1), (bx2, by2), (0, 255, 0), 2)
-        tiles.append(crop)
-    tiles += [np.zeros((CROP_H, CROP_W, 3), np.uint8)] * (PER_PLAYER - len(tiles))
-    show = zv.apply(np.hstack(tiles))
-    sh, sw = show.shape[:2]
+    for row in item["rows"]:
+        buf = jpgs.get(row["ci"])
+        img = cv2.imdecode(buf, cv2.IMREAD_COLOR) if buf is not None else None
+        # the green box marks which figure is the one being identified, since nearby players can appear too
+        tiles.append(crop_tile(img, row) if img is not None else np.zeros((CROP_H, CROP_W, 3), np.uint8))
+    return tiles
+
+
+def render(tiles: list, item: dict, index: int, total: int, label: dict | None, typed: str, zv: ZoomView) -> np.ndarray:
+    show = zv.apply(tile_grid(tiles, grid_cols(len(tiles))))
     status = f" [{label['verdict']}{' #' + str(label['jersey']) if label.get('jersey') else ''}]" if label else ""
     typed_txt = f"  typing: {typed}" if typed else ""
-    zoom_txt = zv.label()
-    page_txt = f"  page {page + 1}/{n_pages}" if n_pages > 1 else ""
     keys = (
         "digits+Enter=jersey | n not on roster | x mixed (2 people) | o bench/sub (bib) | s skip | "
-        "m more crops | b back | wheel zoom | right-click pan | r reset | q quit"
+        "b back | wheel zoom | right-click pan | drag scroll bars | r reset | q quit"
     )
     header = f"{index + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
     if item.get("hint"):
         header += f"  earlier: #{item['hint'][0]} (a = accept)"
-    text = f"{header}{status}{typed_txt}{zoom_txt}{page_txt}   {keys}"
-    cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
-    cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-    return show
+    return add_footer(show, f"{header}{status}{typed_txt}{zv.label()}   {keys}")
 
 
 def cmd_label(args) -> None:
@@ -239,52 +236,46 @@ def cmd_label(args) -> None:
     zv = ZoomView()  # the owner sets it once and keeps it across players
     cv2.setMouseCallback(WINDOW, zv.on_mouse)
     typed = ""
-    page = 0
+    tiles_for = {}  # session.idx -> crops, built when a player first comes up
     try:
         while not session.done:
             item = session.items[session.idx]
-            n_pages = max(1, -(-len(item["rows"]) // PER_PLAYER))
-            imgs = {
-                row["ci"]: cv2.imdecode(jpgs[row["ci"]], cv2.IMREAD_COLOR) for row in item["rows"] if row["ci"] in jpgs
-            }
+            if session.idx not in tiles_for:
+                tiles_for = {session.idx: player_tiles(jpgs, item)}  # keep only the current player's crops
             label = session.labels.get(session.idx)
-            cv2.imshow(WINDOW, render(imgs, item, session.idx, len(items), label, typed, zv, page))
+            cv2.imshow(WINDOW, render(tiles_for[session.idx], item, session.idx, len(items), label, typed, zv))
             key = cv2.waitKey(30) & 0xFF
-            changed, moved = False, False
+            changed = False
             if ord("0") <= key <= ord("9"):
                 typed += chr(key)
             elif key in (13, 10):  # Enter
                 if typed and session.confirm(int(typed)):
-                    changed = moved = True
+                    changed = True
                 typed = ""
             elif key == 8:  # Backspace
                 typed = typed[:-1]
             elif key == ord("r"):
                 zv.reset()
-            elif key == ord("m"):
-                page = (page + 1) % n_pages
             elif key == ord("a") and item.get("hint"):
                 if session.confirm(item["hint"][0]):
-                    typed, changed, moved = "", True, True
+                    typed, changed = "", True
             elif key == ord("n"):
                 session.not_on_roster()
-                typed, changed, moved = "", True, True
+                typed, changed = "", True
             elif key == ord("x"):
                 session.mixed()
-                typed, changed, moved = "", True, True
+                typed, changed = "", True
             elif key == ord("o"):
                 session.bench()
-                typed, changed, moved = "", True, True
+                typed, changed = "", True
             elif key == ord("s"):
                 session.skip()
-                typed, changed, moved = "", True, True
+                typed, changed = "", True
             elif key == ord("b"):
                 session.back()
-                typed, moved = "", True
+                typed = ""
             elif key == ord("q"):
                 break
-            if moved:
-                page = 0
             if changed:
                 session.table().to_csv(truth_path, index=False)
     finally:
