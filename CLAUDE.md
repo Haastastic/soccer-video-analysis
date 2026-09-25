@@ -131,6 +131,13 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - jersey_conflicts rose (clipA 15, clipB 13): the same jersey on several stitched players. That is one real player spread over several stitched groups (tracklet_stitch.py under-merging), not a labeling error; identity is keyed by jersey, so per-player stats still combine them.
 - Outputs: player_identity.csv (per tracklet; split_at_switch=True means no single identity) and identity_segments.csv (named parts of split tracklets as ci ranges). Step 8 must read both. UNVERIFIED beyond the owner's own labeling: the 78 to 80% assumes the part boundaries are right.
 
+## Phase 7 findings: step 8, per-player stats (player_stats.py, 2026-09-24)
+- player_stats.py builds per-player, per-clip stats from identity (player_identity.csv + identity_segments.csv), pitch positions and events.csv, with confidence and visibility on every stat. Outputs are local: RUN/player_stats.csv, player_events.csv, stats_report.json, and data/stats.sqlite across clips; --share-dir writes team aggregates only.
+- Raw frame-to-frame pitch positions are too noisy for speed (raw speed p99 22 to 31 m/s). Positions are smoothed with a 2 s moving average within continuous runs of one identity. Noise floor, measured on sideline_suspect tracklets (people standing still off the play): 34 m/min clipA, 24 m/min clipB at 2 s (44 and 33 at 1 s). Heavier smoothing lowers players and the floor together, and clipA's floor stays high at any setting (calibration drift). Every running stat is reported with the clip's floor, not corrected for it.
+- Sanity check that passed: the goalkeeper shows 38 m/min on clipA, about the floor, as a mostly stationary keeper should. Outfield medians: 112 m/min clipA, 88 m/min clipB, plausible for youth play. clipA runs higher than clipB across the board, consistent with its higher floor, so compare players within a clip, not across clips.
+- Ball events per player are too sparse to use yet: most identified players have 0 to 2 trusted events in 5 minutes. events.py's detections are thin (sparse ball path at min-conf 0.25, touch recall 21% in Phase 4) and only events on identified players count. Tips based on ball involvement need better event detection first.
+- UNVERIFIED: no measured distances or speeds to check against. Speed bands (walk under 2, jog 2 to 4, run 4 to 5.5, fast 5.5+ m/s) are guesses for youth players.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -139,7 +146,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (done for both clips - clipB: 4 anchors, 0.5 to 5 m cross-check; clipA: 6 anchors, accepted with a known higher error floor (3 to 60+ m) from noisier camera motion in that clip - see Phase 3 findings)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
 7. Identity assignment with roster, tracklet stitching, review UI: roster.csv, tracklet_stitch.py and jersey_label.py DONE on the new tracks for both clips, with per-tracklet naming and splitting at switches (Phase 6b): clipA 80% and clipB 78% of target/goalkeeper tracked time identified, 15 and 16 of 21 roster players. The review UI (third piece) is NOT STARTED, not urgent.
-8. Stats database and coaching tips: NOT STARTED
+8. Stats database and coaching tips: per-player stats DONE, first pass (player_stats.py, Phase 7): running stats usable within a clip, event stats too sparse. Coaching tips NOT STARTED.
 
 ## Commands
 - One command for the current stage:
@@ -154,6 +161,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Appearance embeddings: reid_cache.py --run <run> (CPU, writes cache/reid_*.npz)
 - Blind tracklet purity check: track_purity_label.py label --run <run> --sweep <name> [--configs 7,24 --n 20] [--redo ITEMS], then track_purity_label.py score --run <run> --sweep <name>. In the window: click cycles a crop's person (A-H), shift+click marks a swap from that crop on, ctrl+click marks unknown, Enter saves
 - Stitch tracklets: tracklet_stitch.py --run <run> [--montage] (needs tracklet_roles.csv, tracklet_colors.csv; writes tracklet_stitch.csv)
+- Per-player stats: player_stats.py --runs data\clipA,data\clipB [--share-dir <folder>] (needs player_identity.csv, identity_segments.csv, tracklet_pitch_xy.csv.gz, events.csv; writes player_stats.csv, player_events.csv, stats_report.json per run and data/stats.sqlite)
 - Identify players: jersey_label.py label --run <run> [--redo-mixed], then jersey_label.py apply --run <run> (needs roster.csv, tracklet_stitch.csv; writes jersey_truth.csv, jersey_tracklets.csv, player_identity.csv). Stitched players show their tracklets (T1, T2, a yellow bar at each join); click a crop to name just that tracklet, shift+click a crop to split its tracklet where another person starts (parts T1a/T1b, magenta bar; frames around the switch get no identity), then x or Enter finishes the player as "split". apply also writes identity_segments.csv (named parts of split tracklets as ci ranges). --redo-mixed re-opens players marked mixed to name their tracklets.
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
