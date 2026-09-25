@@ -138,6 +138,12 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Ball events per player are too sparse to use yet: most identified players have 0 to 2 trusted events in 5 minutes. events.py's detections are thin (sparse ball path at min-conf 0.25, touch recall 21% in Phase 4) and only events on identified players count. Tips based on ball involvement need better event detection first.
 - UNVERIFIED: no measured distances or speeds to check against. Speed bands (walk under 2, jog 2 to 4, run 4 to 5.5, fast 5.5+ m/s) are guesses for youth players.
 
+## Phase 7b: a third window end to end, and what a window costs the owner (2026-09-25)
+- clipD (43:00 to 48:00, existing cache) was dropped after anchoring: the goal end only shows in the second half, and the camera zooms hard exactly around the anchors (cumulative scale 0.73 to 0.96 to 0.71 within 46 s), so anchors 22 s apart disagreed by 9 to 16 m although each anchor was precise alone (leave-one-out under 2 m). First-half positions would have been extrapolated about 150 s. Lesson: pick windows where a goal end shows near the start and the end, and check zoom volatility (median 2 s scale change from the cache) before anchoring.
+- clipE (20:00 to 25:00, owner's pick) run end to end: 314 tracklets, 83 stitched target/goalkeeper players. The camera zooms a lot in the first 3 minutes (median 2 s scale change 0.030 to 0.034, clipA-like) and little after. 6 anchors (7, 78, 132, 159, 222, 291 s), each precise alone (leave-one-out 1.5 to 2.1 m); calm-section pairs agree within 1 to 2 m, zoomy-section pairs 6 to 14 m. Every frame is within 36 s of an anchor (median 14 s).
+- Identity on clipE: 82% of target/goalkeeper tracked time identified, 11 roster players (the whole on-field side). 35 players confirmed whole, 39 split into named parts, 40 tracklets split at a switch.
+- OWNER TIME PER WINDOW (clock time, breaks included): anchors about 65 min for 6, jersey labeling about 85 min for 83 players, so about 2.5 h per 5-minute window. Live play is about 80 minutes, so a full game at this rate is about 16 windows and 40 hours. The manual steps, not compute, limit scaling; jersey labeling is the larger one.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
