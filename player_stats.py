@@ -128,12 +128,14 @@ def event_rows(run: Path, ident: pd.DataFrame, cache_fps: float) -> pd.DataFrame
     def who(track_id, ci):
         if pd.isna(track_id) or int(track_id) not in by_track.groups:
             return np.nan
-        g = by_track.get_group(int(track_id))
         j = key.get((int(track_id), int(ci)))
         if j is not None:
             return j
-        near = g.iloc[(g.ci - ci).abs().argsort()[:1]]  # xy rows are every other cached frame at 15 fps
-        return near.jersey.iloc[0] if abs(int(near.ci.iloc[0]) - ci) <= 2 else np.nan
+        # xy rows are every other cached frame at 15 fps: use rows within 2 frames, but only if they all agree.
+        # Frames around a marked switch have no identity at all, so an event there stays unattributed.
+        g = by_track.get_group(int(track_id))
+        near = g[(g.ci - ci).abs() <= 2]
+        return near.jersey.iloc[0] if len(near) and (near.jersey == near.jersey.iloc[0]).all() else np.nan
 
     ev["jersey"] = [who(t, c) for t, c in zip(ev.track_id, ev.ci, strict=True)]
     end_ci = (ev.end_s * cache_fps).round()
@@ -217,25 +219,29 @@ def clip_stats(run: Path) -> tuple:
 
 
 def share_summary(stats: pd.DataFrame, reports: list) -> dict:
-    """Team aggregates only: no names, no jersey numbers (ground rules)."""
-    return dict(
-        clips=[
+    """Team aggregates per clip only: no names, no jersey numbers (ground rules). Not pooled across clips, since
+    running stats compare within a clip (each clip has its own noise floor)."""
+    out = []
+    for r in reports:
+        s = stats[stats["clip"] == r["clip"]]
+        out.append(
             dict(
                 clip_s=r["clip_s"],
                 players=r["players"],
                 identified_player_minutes=r["identified_player_minutes"],
                 noise_floor_m_per_min=r["noise_floor"].get("m_per_min"),
+                m_per_min_median=round(float(s.m_per_min.median()), 1),
+                speed_p95_median_mps=round(float(s.speed_p95_mps.median()), 2),
+                pct_fast_median=round(float(s.pct_fast.median()), 1),
+                trusted_touches_total=int(s.touches.sum()),
+                trusted_passes_total=int(s.passes_made.sum()),
             )
-            for r in reports
-        ],
-        team=dict(
-            m_per_min_median=round(float(stats.m_per_min.median()), 1),
-            speed_p95_median_mps=round(float(stats.speed_p95_mps.median()), 2),
-            pct_fast_median=round(float(stats.pct_fast.median()), 1),
-            trusted_touches_total=int(stats.touches.sum()),
-            trusted_passes_total=int(stats.passes_made.sum()),
-        ),
-    )
+        )
+    return dict(clips=out, note="Per clip; compare within a clip, not across clips.")
+
+
+def _has_table(con, name: str) -> bool:
+    return con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
 def main() -> None:
@@ -257,12 +263,14 @@ def main() -> None:
         print(f"{run.name}: {len(stats)} players, {report['identified_player_minutes']} identified player-minutes, "
               f"noise floor {report['noise_floor'].get('m_per_min')} m/min")  # fmt: skip
     stats = pd.concat(all_stats, ignore_index=True)
+    clips = pd.DataFrame(reports).drop(columns=["noise_floor", "position_error_model", "settings"])
+    tables = {"clips": clips, "player_clip_stats": stats, "player_events": pd.concat(all_events, ignore_index=True)}
     with sqlite3.connect(args.db) as con:
-        pd.DataFrame(reports).drop(columns=["noise_floor", "position_error_model", "settings"]).to_sql(
-            "clips", con, if_exists="replace", index=False
-        )
-        stats.to_sql("player_clip_stats", con, if_exists="replace", index=False)
-        pd.concat(all_events, ignore_index=True).to_sql("player_events", con, if_exists="replace", index=False)
+        # replace only the clips in this run, so rerunning one clip keeps the others in the database
+        for name, df in tables.items():
+            old = pd.read_sql(f"SELECT * FROM {name}", con) if _has_table(con, name) else df.iloc[:0]
+            keep = old[~old["clip"].isin(df["clip"].unique())] if "clip" in old else old.iloc[:0]
+            pd.concat([keep, df], ignore_index=True).to_sql(name, con, if_exists="replace", index=False)
     print(f"Wrote player_stats.csv, player_events.csv, stats_report.json per run, and {args.db}")
     if args.share_dir:
         args.share_dir.mkdir(parents=True, exist_ok=True)
