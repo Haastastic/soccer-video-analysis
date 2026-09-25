@@ -17,6 +17,7 @@ jersey_label.py shows these as "suggest #N" with the confidence; `a` accepts aft
 suggestion is never applied on its own. Parts split during labeling get a suggestion from their own crops.
 
 `evaluate` scores suggestions for a window that is already labeled (leave it out of --from), at the tracklet level.
+It writes to RUN/jersey_suggest_eval/, never over the suggestions jersey_label.py reads.
 
 Outputs (git-ignored, derived from footage of minors): RUN/jersey_suggest.npz (per-crop probabilities),
 RUN/jersey_suggestions.csv, and per labeled window a feature cache RUN/jersey_features_<model>.npz.
@@ -155,14 +156,20 @@ def joint_assign(units: list, classes: np.ndarray) -> None:
     for u in sorted(units, key=lambda u: -u["conf0"]):
         banned = {v["jersey"] for v in taken if not (v["hi"] < u["lo"] or v["lo"] > u["hi"])}
         order = [k for k in np.argsort(-u["p"]) if classes[k] not in banned]
+        if not order:  # more overlapping tracklets than known players: fall back to the unconstrained ranking
+            order = list(np.argsort(-u["p"]))
         u["jersey"], u["conf"] = int(classes[order[0]]), float(u["p"][order[0]])
         u["alts"] = [int(classes[k]) for k in order[1:3]]
         taken.append(u)
 
 
 def cmd_suggest(args) -> None:
-    sources = [require_under_data(Path(r)) for r in args.sources.split(",")]
-    run = args.run
+    suggest(args.run, [require_under_data(Path(r)) for r in args.sources.split(",")], args.run)
+
+
+def suggest(run: Path, sources: list, out_dir: Path) -> None:
+    """Write jersey_suggest.npz and jersey_suggestions.csv for `run` into out_dir."""
+    out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Training on {len(sources)} labeled windows for {run.name}:")
     clf = train(run, sources)
     items = jl.build_items(run)
@@ -170,7 +177,7 @@ def cmd_suggest(args) -> None:
     print(f"{run.name}: embedding {len(rows)} crops shown by jersey_label.py...", flush=True)
     P = clf.predict_proba(features(box_crops(run, rows)))
     np.savez_compressed(
-        run / "jersey_suggest.npz",
+        out_dir / "jersey_suggest.npz",
         track_id=rows.track_id.to_numpy(int),
         ci=rows.ci.to_numpy(int),
         P=P.astype(np.float32),
@@ -196,10 +203,10 @@ def cmd_suggest(args) -> None:
         )  # fmt: skip
     out = pd.DataFrame(units + players)[["level", "player_id", "track_id", "jersey", "conf", "alts"]]
     out["alts"] = out.alts.map(lambda a: " ".join(str(x) for x in a))
-    out.to_csv(run / "jersey_suggestions.csv", index=False)
+    out.to_csv(out_dir / "jersey_suggestions.csv", index=False)
     t = out[out.level == "tracklet"]
     print(
-        f"Wrote {run / 'jersey_suggestions.csv'}: {len(t)} tracklets, "
+        f"Wrote {out_dir / 'jersey_suggestions.csv'}: {len(t)} tracklets, "
         f"{int((t.conf >= 0.5).sum())} with confidence >= 0.5"
     )
 
@@ -210,9 +217,10 @@ def cmd_evaluate(args) -> None:
     sources = [require_under_data(Path(r)) for r in args.sources.split(",")]
     if run.resolve() in [s.resolve() for s in sources]:
         raise SystemExit("Leave the evaluated window out of --from.")
-    args_s = argparse.Namespace(run=run, sources=args.sources)
-    cmd_suggest(args_s)
-    sug = pd.read_csv(run / "jersey_suggestions.csv")
+    # a separate folder: scoring must not replace the suggestions jersey_label.py reads for this window
+    out_dir = run / "jersey_suggest_eval"
+    suggest(run, sources, out_dir)
+    sug = pd.read_csv(out_dir / "jersey_suggestions.csv")
     pi = pd.read_csv(run / "player_identity.csv")
     truth = pi[pi.jersey.notna() & ~pi.split_at_switch.fillna(False).astype(bool)][["track_id", "jersey"]]
     t = sug[sug.level == "tracklet"].merge(truth, on="track_id", suffixes=("", "_truth"))
