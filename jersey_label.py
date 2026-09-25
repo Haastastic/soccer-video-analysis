@@ -11,7 +11,9 @@ identity plan always called for:
 
   0-9 then Enter   type the jersey number, Enter to confirm (checked against roster.csv)
   Backspace        remove the last typed digit
-  a                accept the "earlier" jersey shown in the status line (after checking the crops)
+  a                accept the jersey shown in the status line (after checking the crops): "earlier" (the owner's own
+                   label of the same detections in a previous pass) or "suggest" (jersey_suggest.py's appearance
+                   model, with its confidence and the next two guesses). Unnamed parts show their guess as "~N".
   n                confident this is NOT a roster player (e.g. a misclassified opponent)
   x                the crops show TWO DIFFERENT people - tracklet_stitch.py over-merged this one
   o                a substitute in a bib/off the pitch - a roster player, but not playing right now
@@ -176,6 +178,7 @@ def build_items(run: Path) -> list:
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
     tr = tr[tr.track_id.isin(stitch.track_id)].merge(stitch, on="track_id").sort_values("ci")
     hints, thints = earlier_hints(run, tr)
+    sugg = load_suggestions(run)
     items = []
     for pid, d in tr.groupby("player_id"):
         d = d.reset_index(drop=True)
@@ -192,10 +195,77 @@ def build_items(run: Path) -> list:
                 rows=rows,
                 hint=hints.get(pid),
                 thints={t: thints[t] for t in tracklets if t in thints},
+                psugg=sugg["player"].get(pid),
+                tsugg={t: sugg["tracklet"][t] for t in tracklets if t in sugg["tracklet"]},
             )
         )
+    for it in items:  # per-crop probabilities, for parts split during labeling
+        it["P"] = [sugg["crop"].get((r["track_id"], r["ci"])) for r in it["rows"]]
     items.sort(key=lambda it: it["player_id"])
     return items
+
+
+def load_suggestions(run: Path) -> dict:
+    """jersey_suggest.py output: per tracklet and per player (jersey, confidence, alternates), per crop probabilities.
+
+    Empty if jersey_suggest.py has not been run for this window (the tool works the same, without suggestions)."""
+    out = dict(player={}, tracklet={}, crop={}, classes=None)
+    csv, npz = run / "jersey_suggestions.csv", run / "jersey_suggest.npz"
+    if not (csv.exists() and npz.exists()):
+        return out
+    for r in pd.read_csv(csv).itertuples():
+        alts = [int(a) for a in str(r.alts).split()] if isinstance(r.alts, str) else []
+        entry = (int(r.jersey), float(r.conf), alts)
+        if r.level == "player":
+            out["player"][r.player_id] = entry
+        else:
+            out["tracklet"][int(r.track_id)] = entry
+    z = np.load(npz)
+    SUGG_CLASSES[:] = [int(c) for c in z["classes"]]
+    out["crop"] = {(int(t), int(c)): p for t, c, p in zip(z["track_id"], z["ci"], z["P"], strict=True)}
+    return out
+
+
+SUGG_CLASSES: list = []  # jersey classes of the per-crop probabilities (set by load_suggestions)
+
+
+def suggestion(item: dict, session: "Session", key: tuple | None) -> tuple | None:
+    """What `a` would accept, as (jersey, confidence or None, alternates, source).
+
+    An exact earlier label of the same detections ("earlier") wins over the appearance model ("suggest").
+    key None means the whole player. A part of a split tracklet gets a suggestion from its own crops.
+    """
+    if key is None:
+        if item.get("hint"):
+            return item["hint"][0], None, [], "earlier"
+        return (*item["psugg"], "suggest") if item.get("psugg") else None
+    tid = key[0]
+    if tid not in session.splits:
+        if tid in item["thints"]:
+            return item["thints"][tid][0], None, [], "earlier"
+        return (*item["tsugg"][tid], "suggest") if tid in item["tsugg"] else None
+    ps = [
+        p
+        for p, r in zip(item["P"], item["rows"], strict=True)
+        if p is not None and session.seg_of(r["track_id"], r["ci"]) == key
+    ]
+    if not ps or not SUGG_CLASSES:
+        return None
+    lp = np.log(np.stack(ps) + 1e-9).mean(0)
+    pr = np.exp(lp - lp.max())
+    pr /= pr.sum()
+    order = np.argsort(-pr)
+    return SUGG_CLASSES[order[0]], float(pr[order[0]]), [SUGG_CLASSES[k] for k in order[1:3]], "suggest"
+
+
+def suggestion_text(sg: tuple | None) -> str:
+    if sg is None:
+        return ""
+    jersey, conf, alts, source = sg
+    if source == "earlier":
+        return f"earlier: #{jersey} (a = accept)"
+    then = f"; then {' '.join('#' + str(a) for a in alts)}" if alts else ""
+    return f"suggest #{jersey} ({conf:.2f}{then}) (a = accept)"
 
 
 class Session:
@@ -437,6 +507,10 @@ def mark_tracklets(tiles: list, item: dict, session: "Session") -> list:
         if prev is not None and key != prev:
             cv2.rectangle(t, (0, 0), (7, CROP_H - 1), DIVIDER if key[0] != prev[0] else SPLIT_BAR, -1)
         text = segment_text(session.tag(item, key), session.tlabels.get(key))
+        if key not in session.tlabels:
+            sg = suggestion(item, session, key)
+            if sg is not None:
+                text += f" ~{sg[0]}" + (f" {sg[1]:.2f}" if sg[1] is not None else "")
         cv2.putText(t, text, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(t, text, (12, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
         out.append(t)
@@ -451,15 +525,13 @@ def render(tiles: list, session: "Session", total: int, typed: str, zv: ZoomView
     typed_txt = f"  typing: {typed}" if typed else ""
     header = f"{session.pos + 1}/{total}  {item['player_id']} ({item['role']}, {item['n_tracklets']} tracklets)"
     if session.selected is not None:
-        tid = session.selected[0]
-        hint = item["thints"].get(tid) if tid not in session.splits else None  # a split tracklet's hint is moot
-        header += f"  {session.tag(item, session.selected)} selected" + (
-            f", earlier: #{hint[0]} (a = accept)" if hint else ""
-        )
+        sg = suggestion_text(suggestion(item, session, session.selected))
+        header += f"  {session.tag(item, session.selected)} selected" + (f", {sg}" if sg else "")
         keys = "digits+Enter / a / n / o / s label this part | Backspace clear | Esc or click deselect"
     else:
-        if item.get("hint"):
-            header += f"  earlier: #{item['hint'][0]} (a = accept)"
+        sg = suggestion_text(suggestion(item, session, None))
+        if sg:
+            header += f"  {sg}"
         named = len(session.named())
         if named:
             header += f"  {named}/{len(session.segments())} parts named: x or Enter finishes as split"
@@ -544,10 +616,9 @@ def cmd_label(args) -> None:
             elif key == ord("r"):
                 zv.reset()
             elif key == ord("a"):
-                tid = session.selected[0] if sel else None
-                hint = (item["thints"].get(tid) if tid not in session.splits else None) if sel else item.get("hint")
-                if hint:
-                    _ = session.label_tracklet(hint[0], "confirmed") if sel else session.confirm(hint[0])
+                sg = suggestion(item, session, session.selected if sel else None)
+                if sg:
+                    _ = session.label_tracklet(sg[0], "confirmed") if sel else session.confirm(sg[0])
                 typed = ""
             elif key in (ord("n"), ord("o"), ord("s")):
                 verdict = {ord("n"): "not_on_roster", ord("o"): "bench", ord("s"): "skipped"}[key]
