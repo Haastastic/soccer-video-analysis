@@ -58,7 +58,9 @@ TRUSTED = 0.5  # events.py's own review threshold
 def identity_rows(run: Path, xy: pd.DataFrame) -> pd.DataFrame:
     """xy rows with jersey, name and a run key (one identity, one tracklet part), for identified rows only."""
     pi = pd.read_csv(run / "player_identity.csv")
-    whole = pi[pi.jersey.notna() & ~pi.get("split_at_switch", False).fillna(False).astype(bool)]
+    if "split_at_switch" not in pi:  # written before tracklets could be split
+        pi["split_at_switch"] = False
+    whole = pi[pi.jersey.notna() & ~pi.split_at_switch.fillna(False).astype(bool)]
     a = xy.merge(whole[["track_id", "jersey"]], on="track_id")
     a["part"] = 0
     parts = [a]
