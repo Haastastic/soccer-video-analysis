@@ -105,18 +105,19 @@ def labeled_samples(run: Path) -> pd.DataFrame:
 
 
 def training_set(run: Path) -> tuple:
-    """(features, jerseys) of a labeled window, cached and tied to its identity labels."""
+    """(features, jerseys) of a labeled window. Features are cached, tied to exactly which crops were sampled; the
+    jerseys are always read fresh from the current labels, so a corrected label (e.g. two swapped) takes effect."""
     rows = labeled_samples(run)
-    stamp = tracklet_fingerprint(rows.rename(columns={"part": "p"}), salt=f"{MODEL}:{PER_PART}:{rows.jersey.sum()}")
+    y = rows.jersey.to_numpy(int)
+    stamp = tracklet_fingerprint(rows, salt=f"{MODEL}:{PER_PART}")
     path = run / f"jersey_features_{MODEL}.npz"
     if path.exists():
         z = np.load(path, allow_pickle=False)
         if str(z["stamp"]) == stamp:
-            return z["F"], z["y"]
+            return z["F"], y
     print(f"{run.name}: embedding {len(rows)} labeled crops...", flush=True)
     F = features(box_crops(run, rows))
-    y = rows.jersey.to_numpy(int)
-    np.savez_compressed(path, F=F, y=y, stamp=stamp)
+    np.savez_compressed(path, F=F, stamp=stamp)
     return F, y
 
 
