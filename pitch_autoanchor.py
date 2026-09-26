@@ -18,13 +18,12 @@ box-less frames carry the last fit; the chain stops at the next owner anchor.
 Accepted snaps are written as anchors in pitch_calibrate.py's format (the 10 standard landmarks, projected), marked
 "auto": true, together with the owner's anchors. pitch_calibrate.py cross-checks only the owner's anchors.
 
-Measured, holding out each owner anchor and calibrating from the rest (owner anchors alone -> with automatic ones,
-median): clipA 4.9 -> 0.8 m, clipB 1.1 -> 0.5 m, clipD 1.2 -> 0.3 m, clipE 4.1 -> 0.5 m (every-snap perspective
-version; the chosen settings below give clipE 1.1 m with a better worst case and no added sideline noise). Seeded
-from ONE owner anchor, chaining held the owner's other anchors in the same box-visible stretch to about 0.2 to 1 m.
-It does not bridge long stretches without the penalty area in view (camera at midfield): there the error stays
-whatever the camera motion gives, 8 to 27 m in clipD and clipE. So the owner needs about ONE anchor per stretch
-where the box is visible, not one every 30 to 40 s; the report lists stretches without snaps far from any anchor.
+Measured, holding out each owner anchor and calibrating from the rest, with the pipeline's blended conversion (owner
+anchors alone -> with automatic ones, median (worst)): clipA 1.3 (16.3) -> 0.9 (5.0) m, clipB 1.3 (2.6) -> 0.9 (2.4)
+m, clipD 1.9 (12.4) -> 1.3 (12.4) m, clipE 2.7 (9.4) -> 1.1 (1.5) m. The main gain is removing the large errors
+during zooms. It does not bridge long stretches without the penalty area in view (camera at midfield: clipD's 204 s
+anchor stays 12 m off), so the owner needs about ONE anchor per stretch where the box is visible, not one every 30
+to 40 s; the report lists stretches without snaps far from any anchor.
 
 Outputs (git-ignored): RUN/pitch_anchors_auto.local.json, RUN/pitch_autoanchor_report.json.
 
@@ -44,7 +43,7 @@ from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
 
 from pitch_calibrate import Calibration, apply_h, solve_anchor
-from sv_common import Cache, read_frames, require_under_data
+from sv_common import Cache, cache_stride, read_frames, require_under_data
 
 STEP_S = 2.0
 MIN_ON_LINE = 0.6  # 57% of prototype snaps passed; 96% of those were within 2 m
@@ -71,8 +70,8 @@ LANDMARKS = {  # the anchor UI's standard points, pitch meters (X from the goal 
 }
 
 
-def model_points(step: float = 0.25) -> np.ndarray:
-    """Pitch-plane points along the goal-end lines."""
+def model_segments(step: float = 0.25) -> list:
+    """Pitch-plane points along each goal-end line, one array per continuous line."""
     segs = [
         ((0, -20.16), (0, 20.16)),  # goal line across the penalty area
         ((0, -9.16), (5.5, -9.16)), ((5.5, -9.16), (5.5, 9.16)), ((5.5, 9.16), (0, 9.16)),  # six-yard box
@@ -84,7 +83,12 @@ def model_points(step: float = 0.25) -> np.ndarray:
         pts.append(np.c_[np.linspace(x0, x1, n), np.linspace(y0, y1, n)])
     ang = np.linspace(-np.arccos(5.5 / 9.15), np.arccos(5.5 / 9.15), 60)  # penalty arc outside the box
     pts.append(np.c_[11 + 9.15 * np.cos(ang), 9.15 * np.sin(ang)])
-    return np.concatenate(pts)
+    return pts
+
+
+def model_points(step: float = 0.25) -> np.ndarray:
+    """All goal-end line points in one array (for fitting; see model_segments for drawing)."""
+    return np.concatenate(model_segments(step))
 
 
 def line_mask(img: np.ndarray) -> np.ndarray:
@@ -102,8 +106,10 @@ def snap(h_img2pitch: np.ndarray, mask: np.ndarray, P: np.ndarray) -> tuple:
     inside = (base[:, 0] > 5) & (base[:, 0] < W - 5) & (base[:, 1] > 5) & (base[:, 1] < H - 5)
     if inside.sum() < 50:
         return h_img2pitch, dict(ok=False, on_line=0.0, n=int(inside.sum()))
+    # draw each line on its own: one polyline over all points would join unrelated lines with fake strokes
     band = np.zeros(mask.shape, np.uint8)
-    cv2.polylines(band, [base.astype(np.int32).reshape(-1, 1, 2)], False, 1, BAND_PX)
+    segs = [apply_h(h0, seg).astype(np.int32).reshape(-1, 1, 2) for seg in model_segments()]
+    cv2.polylines(band, segs, False, 1, BAND_PX)
     dist = cv2.distanceTransform(((mask == 0) | (band == 0)).astype(np.uint8), cv2.DIST_L2, 5)
     pts = base[inside]
     c = pts.mean(0)
@@ -178,7 +184,8 @@ def run_chain(run: Path, anchors: list) -> tuple:
     step = int(round(STEP_S * cache.fps))
     seeds = [(int(round(a["time_s"] * cache.fps)), solve_anchor(a["points"])[0]) for a in anchors]
     grid = sorted(set(range(0, cache.n, step)) | {s[0] for s in seeds})
-    frames = dict(read_frames(run / "clip.mp4", grid))
+    stride = cache_stride(run)  # cached frame ci is video frame ci * stride
+    frames = {f // stride: img for f, img in read_frames(run / "clip.mp4", [c * stride for c in grid])}
     P = model_points()
     res = chain(cache, frames, seeds, P)
     shape = next(iter(frames.values())).shape
@@ -243,9 +250,9 @@ def cmd_evaluate(args) -> None:
         truth = np.array([p["pitch"] for p in held["points"]], float)
         errs = {}
         for name, set_ in (("manual", rest), ("auto", rest + auto)):
-            cal = Calibration(cache, set_)
-            h = cal.homography(ci, int(cal.nearest(np.array([ci]))[0]))
-            errs[name] = round(float(np.median(np.hypot(*(apply_h(h, img) - truth).T))), 2)
+            # the same blended conversion the pipeline uses (pitch_calibrate.Calibration.to_pitch)
+            xy, _ = Calibration(cache, set_).to_pitch(np.full(len(img), ci), img[:, 0], img[:, 1])
+            errs[name] = round(float(np.median(np.hypot(*(xy - truth).T))), 2)
         rows.append(dict(held_out_s=held["time_s"], manual_err_m=errs["manual"], with_auto_err_m=errs["auto"]))
         print(rows[-1], flush=True)
     m = np.median([r["manual_err_m"] for r in rows])
