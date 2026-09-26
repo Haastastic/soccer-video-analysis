@@ -162,7 +162,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 ## Phase 8 (in progress, 2026-09-26): no owner anchors, no jersey labeling
 - Owner decision: pitch anchoring and jersey identity must be automated (whole team). clipF (25:00 to 30:00) is
   processed through events; the owner stopped jersey labeling it after 2 players (about 13 min).
-- AUTOMATIC PITCH (pitch_ptz.py), DONE AND VERIFIED, NOT YET APPLIED. The camera stands still all game: every owner
+- AUTOMATIC PITCH (pitch_ptz.py), DONE, VERIFIED AND APPLIED. The camera stands still all game: every owner
   anchor (clipA, B, D, E, both halves) implies the same camera centre within a few metres, and one camera fitted to
   all 20 anchors reprojects them about as well as each anchor's free homography. So each frame has only pan, tilt
   and zoom (roll ~0), searched exhaustively against the painted lines every 2 s (tracked from the previous fix via
@@ -176,8 +176,16 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - FOUND: clipB's owner anchors measure X from the other goal than clipA/D/E. Automatic fixes use one reference goal
   for all windows, so clipB positions flip when applied (within-clip speeds unaffected).
 - Final camera data/pitch_camera.local.json; `pitch_ptz.py run` done on clipA, B, D, E, F (fixed 89 to 98% of 2 s
-  frames, longest gap 4 to 12 s). Still to do: pitch_calibrate.py apply with RUN/pitch_anchors_ptz.local.json on
-  all five, player_stats rerun (error model for anchor-less windows added, untested).
+  frames, longest gap 4 to 12 s).
+- APPLIED 2026-09-26 on clipA, B, D, E, F (pitch_calibrate.py apply --anchors RUN/pitch_anchors_ptz.local.json;
+  previous outputs in data/<clip>/archive_owner_anchor_pitch/). Player positions on the pitch: 85 to 93%. Against
+  the previous calibration, median (p90) difference per detection: clipE 1.5 (10.5) m, clipA 5.2 (14.6), clipD
+  10.9 (30.1; its owner calibration extrapolated ~150 s), clipB 5.3 (12.6) after mirroring X only (slope -0.86):
+  the reference-goal flip, confirmed. Y is defined by the camera side, so it does not flip.
+- player_stats rerun (A, B, E): outfield median m/min 99.7 -> 84.3 (A), 77.1 -> 70.5 (B), 84.9 -> 76.9 (E); noise
+  floor 30.5 -> 28.7, 21.8 -> 24.0, 23.9 -> 17.8. Goalkeeper (median X 4 to 5 m) 34 to 35 m/min, at the floor.
+  The anchor-less error model is flat (pos_err_m 0.5 for everyone); the held-out tests above say typical error is
+  0.2 to 0.4 m with worst cases 2 to 2.4 m, so it understates rare bad frames. UNVERIFIED: no measured distances.
 - AUTOMATIC IDENTITY (jersey_auto.py, experiments in data/_jersey_exp/auto/), IN PROGRESS. Per-sample (0.5 s) evidence
   along each tracklet, smoothed with Viterbi. Leave-one-window-out on clipA, B, E:
   - Appearance from the owner's other windows: 67 to 82% (first half), 15% on clipB (other half: substitutes,
@@ -211,6 +219,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
 - Automatic pitch anchors: pitch_autoanchor.py run --run <run> --anchors <owner anchors json> (writes RUN/pitch_anchors_auto.local.json and a report of uncovered stretches), then pitch_calibrate.py apply --anchors RUN/pitch_anchors_auto.local.json. Check against held-out owner anchors: pitch_autoanchor.py evaluate
+- Automatic pitch with no owner anchors (current default): pitch_ptz.py run --run <run> (needs data/pitch_camera.local.json from pitch_ptz.py fit; writes RUN/pitch_anchors_ptz.local.json), then pitch_calibrate.py apply --run <run> --anchors RUN/pitch_anchors_ptz.local.json. Held-out check: pitch_ptz.py evaluate
 - Place pitch anchors: pitch_anchor_ui.py --run <run> (local browser UI; writes pitch_anchors.local.json)
 - Tracker sweeps that leave the pipeline untouched: replay_trackers.py --run <run> --grid strict|reid|refind --fps-list 15 --sweep <name> [--reid <npz>] (writes data/<run>/sweeps/<name>/; identity-scored against identity_rows.csv.gz, frozen from the jersey labels on first use)
 - Appearance embeddings: reid_cache.py --run <run> (CPU, writes cache/reid_*.npz)
@@ -229,8 +238,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
-9. RESUME HERE (saved 2026-09-26, later): see Phase 8. (a) Apply automatic pitch: pitch_calibrate.py apply --run
-   RUN --anchors RUN/pitch_anchors_ptz.local.json for clipA, B, D, E, F; rerun player_stats; PR. (b) Identity: cut
+9. RESUME HERE (saved 2026-09-26, later): see Phase 8. (a) DONE 2026-09-26: automatic pitch applied to clipA, B, D,
+   E, F, player_stats rerun. (b) Identity: cut
    tracklets at overlap episodes, measure piece purity against owner labels, identify pieces from fine-tuned reads
    plus appearance and relative position, rejoin across overlaps, score leave-one-window-out; then train the
    production reader on all labeled windows and write player_identity.csv / identity_segments.csv for clipF.
