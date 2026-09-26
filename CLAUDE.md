@@ -199,6 +199,38 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   - Main remaining error: a read spread along a tracklet past a person swap (right 94 to 96% within 1 s of a read,
     55% beyond 30 s; 39 to 63% on tracklets the owner split). 47 of 48 owner switch points have a box overlap
     (>= 0.1 of the smaller box) within 1.5 s, but overlaps happen about 10 times per tracked minute.
+  - TRIED, NO GAIN (exp8.py, 2026-09-26): allow identity switches only at box-overlap episodes (Viterbi switch cost
+    low there, high or forbidden elsewhere). Cut pieces are pure (98.6 to 100% of labeled samples in one-person
+    pieces vs 82 to 90% uncut tracklets) but only because they are tiny: 28 to 82 pieces per tracked minute, a cut
+    every 1 to 2 s. Top-1 accuracy leave-one-window-out was slightly WORSE than switching anywhere at cost 20
+    (mean 63.9 vs 65.8%; clipE 82.9 vs 84.4, clipA 74.6 vs 75.2, clipB 34.1 vs 37.9). Where a switch may happen was
+    never the limit; deciding whether one happened is, and that needs evidence on both sides.
+  - The real limits: (1) evidence. Most samples have no read nearby, so appearance decides them, and appearance
+    fails across halves (clipB 34 to 38%). (2) Confidence is unusable: segment posteriors >= 0.99 cover 80 to 95% of
+    samples but are right only 41 to 90%, because summing correlated per-sample appearance log-probs is
+    overconfident. A production output must be trustable, so confidence has to come from reads (count of agreeing
+    reads per segment), not appearance sums.
+  - DONE (exp9.py, jersey_auto.py identify, 2026-09-26): trust from reads. A sample is identified only if its
+    decoded stretch has >= 3 reads of that number, >= 80% of the stretch's reads, and one within 10 s. Leave-one-
+    window-out, held-out readers: identified 39.4 / 40.6 / 43.4% of labeled samples (E / A / B), right 98.4 / 99.8 /
+    91.0%. Reads on every tracklet row (instead of every 4th cached frame) doubled usable reads and added 2 to 12
+    points of coverage. Distance limit: 30 s instead of 10 adds about 5 points but clipE drops to 97.0%.
+  - Appearance retrained on the window's own read-confirmed samples (pseudo-labels 90 to 100% right) helps clipB,
+    the other half (top-1 37.9 -> 54.1%), not A or E. Kept: it only moves stretch boundaries, trust is still reads.
+    Trusting read-less stretches by mean appearance probability: no usable coverage at any threshold. Dropped.
+  - clipB's 91%: nearly all errors are one player who appears only in clipB, so the held-out reader never
+    saw that number and read it consistently as one of three similar trained numbers (19 to 29 agreeing reads). Requiring the original,
+    not fine-tuned, reader to agree: 91 -> 94.7% but -8 points coverage on every window; a check keyed on the
+    predicted number cannot catch it (the wrong number was a trained one). PRODUCTION RISK: players with few or no
+    labeled crops (3 of 21 roster players have none, 8 under 30) can be misread as a similar trained number.
+  - Coverage ceiling: 61 to 72% of labeled time is on tracklets with any read; the rest (shorter tracklets, median
+    18 to 28 s) has none. Linking identity across tracklets would be the next lever (stitching precision was ~48%).
+  - Production reader: jersey_auto.py finetune on clipA+B+E (3974 crops) -> models/jersey/parseq_ft_game.pt.
+  - clipF WRITTEN (jersey_auto.py identify --from A,B,E): 50.1% of target/goalkeeper samples identified, 10 players,
+    107 stretches, 20.5 identified player-minutes (clipE with owner labels: 34.0). Against the owner's 2 labeled
+    clipF players (69 s overlap): 91% agree, disagreements at switch boundaries. Two clipE players are absent and
+    two new numbers appear, each with 49 to 60 confident reads on 5 to 6 tracklets: probably substitutions,
+    UNVERIFIED. The goalkeeper got no reads at all (26 training crops; back rarely toward the camera) so has no clipF stats.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
@@ -207,7 +239,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 4. Team classification: team_classify.py (done; hand-checked, 65 to 73% accuracy, capped by tracklet fragmentation, goalkeeper weak)
 5. Pitch: pitch_mask.py on-pitch test (done, sampled), pitch_calibrate.py anchor homography (done for both clips - clipB: 4 anchors, 0.5 to 5 m cross-check; clipA: 6 anchors, accepted with a known higher error floor (3 to 60+ m) from noisier camera motion in that clip - see Phase 3 findings)
 6. Event detection: events.py (possession, touch, pass, turnover done and unverified; shots not started, need calibration)
-7. Identity assignment with roster, tracklet stitching, review UI: roster.csv, tracklet_stitch.py and jersey_label.py DONE on the new tracks for both clips, with per-tracklet naming and splitting at switches (Phase 6b): clipA 80% and clipB 78% of target/goalkeeper tracked time identified, 15 and 16 of 21 roster players. The review UI (third piece) is NOT STARTED, not urgent.
+7. Identity assignment with roster, tracklet stitching, review UI: roster.csv, tracklet_stitch.py and jersey_label.py DONE on the new tracks for both clips, with per-tracklet naming and splitting at switches (Phase 6b): clipA 80% and clipB 78% of target/goalkeeper tracked time identified, 15 and 16 of 21 roster players. The review UI (third piece) is NOT STARTED, not urgent. AUTOMATIC identity (jersey_auto.py identify, Phase 8): about 40% of labeled time held out at 91 to 99.8% right; written for clipF.
 8. Stats database and coaching tips: per-player stats DONE, first pass (player_stats.py, Phase 7): running stats usable within a clip, event stats too sparse. Coaching tips NOT STARTED.
 
 ## Commands
@@ -227,7 +259,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Stitch tracklets: tracklet_stitch.py --run <run> [--montage] (needs tracklet_roles.csv, tracklet_colors.csv; writes tracklet_stitch.csv)
 - Per-player stats: player_stats.py --runs data\clipA,data\clipB [--share-dir <folder>] (needs player_identity.csv, identity_segments.csv, tracklet_pitch_xy.csv.gz, events.csv; writes player_stats.csv, player_events.csv, stats_report.json per run and data/stats.sqlite)
 - Jersey suggestions for a new window: jersey_suggest.py suggest --run <run> --from <labeled runs> (DINOv2 on GPU; writes jersey_suggestions.csv, jersey_suggest.npz; jersey_label.py shows them). Score on a labeled window: jersey_suggest.py evaluate --run <run> --from <other runs>
-- Identify players: jersey_label.py label --run <run> [--redo-mixed], then jersey_label.py apply --run <run> (needs roster.csv, tracklet_stitch.csv; writes jersey_truth.csv, jersey_tracklets.csv, player_identity.csv). Stitched players show their tracklets (T1, T2, a yellow bar at each join); click a crop to name just that tracklet, shift+click a crop to split its tracklet where another person starts (parts T1a/T1b, magenta bar; frames around the switch get no identity), then x or Enter finishes the player as "split". apply also writes identity_segments.csv (named parts of split tracklets as ci ranges). --redo-mixed re-opens players marked mixed to name their tracklets.
+- Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
+- Identify players by hand: jersey_label.py label --run <run> [--redo-mixed], then jersey_label.py apply --run <run> (needs roster.csv, tracklet_stitch.csv; writes jersey_truth.csv, jersey_tracklets.csv, player_identity.csv). Stitched players show their tracklets (T1, T2, a yellow bar at each join); click a crop to name just that tracklet, shift+click a crop to split its tracklet where another person starts (parts T1a/T1b, magenta bar; frames around the switch get no identity), then x or Enter finishes the player as "split". apply also writes identity_segments.csv (named parts of split tracklets as ci ranges). --redo-mixed re-opens players marked mixed to name their tracklets.
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
@@ -239,10 +272,10 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
 9. RESUME HERE (saved 2026-09-26, later): see Phase 8. (a) DONE 2026-09-26: automatic pitch applied to clipA, B, D,
-   E, F, player_stats rerun. (b) Identity: cut
-   tracklets at overlap episodes, measure piece purity against owner labels, identify pieces from fine-tuned reads
-   plus appearance and relative position, rejoin across overlaps, score leave-one-window-out; then train the
-   production reader on all labeled windows and write player_identity.csv / identity_segments.csv for clipF.
+   E, F, player_stats rerun. (b) DONE 2026-09-26: automatic identity (jersey_auto.py identify) with
+   read-count trust, production reader, clipF identity written and stats rerun (Phase 8). Open, owner's call:
+   raise coverage (about 40% held out, 50% on clipF) by linking identity across tracklets; the goalkeeper (no
+   reads); confirm the two probable clipF substitutions; a new window end to end with no owner steps.
 8. SUPERSEDED by 9 (owner chose full automation over timing manual steps). Next: window 25:00 to 30:00 as data\clipF, the first window using both jersey suggestions (Phase 7c) and automatic pitch anchors (Phase 7d); the point is to measure owner time against clipE's (anchors ~65 min, jersey ~85 min). Steps:
    a. python run_all.py --video <the game video in videos\> --start 00:25:00 --duration 300 --out data\clipF (detection ~11 min GPU, chosen tracker, ball linking), then pitch_mask.py, team_classify.py classify, tracklet_stitch.py, events.py on data\clipF. Check zoom volatility first (median 2 s scale change from the cache, Phase 7b).
    b. Owner: pitch_anchor_ui.py --run data\clipF, about ONE anchor per stretch where a penalty area is visible (record start/end times). Then pitch_autoanchor.py run --run data\clipF --anchors data\clipF\pitch_anchors.local.json; if its report lists uncovered stretches that show a box, owner adds an anchor there and it is rerun. Then pitch_calibrate.py apply --anchors data\clipF\pitch_anchors_auto.local.json.
