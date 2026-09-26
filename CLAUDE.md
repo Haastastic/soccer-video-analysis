@@ -199,6 +199,17 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   - Main remaining error: a read spread along a tracklet past a person swap (right 94 to 96% within 1 s of a read,
     55% beyond 30 s; 39 to 63% on tracklets the owner split). 47 of 48 owner switch points have a box overlap
     (>= 0.1 of the smaller box) within 1.5 s, but overlaps happen about 10 times per tracked minute.
+  - TRIED, NO GAIN (exp8.py, 2026-09-26): allow identity switches only at box-overlap episodes (Viterbi switch cost
+    low there, high or forbidden elsewhere). Cut pieces are pure (98.6 to 100% of labeled samples in one-person
+    pieces vs 82 to 90% uncut tracklets) but only because they are tiny: 28 to 82 pieces per tracked minute, a cut
+    every 1 to 2 s. Top-1 accuracy leave-one-window-out was slightly WORSE than switching anywhere at cost 20
+    (mean 63.9 vs 65.8%; clipE 82.9 vs 84.4, clipA 74.6 vs 75.2, clipB 34.1 vs 37.9). Where a switch may happen was
+    never the limit; deciding whether one happened is, and that needs evidence on both sides.
+  - The real limits: (1) evidence. Most samples have no read nearby, so appearance decides them, and appearance
+    fails across halves (clipB 34 to 38%). (2) Confidence is unusable: segment posteriors >= 0.99 cover 80 to 95% of
+    samples but are right only 41 to 90%, because summing correlated per-sample appearance log-probs is
+    overconfident. A production output must be trustable, so confidence has to come from reads (count of agreeing
+    reads per segment), not appearance sums.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
@@ -239,7 +250,10 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
 9. RESUME HERE (saved 2026-09-26, later): see Phase 8. (a) DONE 2026-09-26: automatic pitch applied to clipA, B, D,
-   E, F, player_stats rerun. (b) Identity: cut
+   E, F, player_stats rerun. (b) Overlap cuts tried and dropped (Phase 8). Proposed next: confidence
+   from agreeing reads per segment; more reads (every cached frame, production reader trained on all three
+   windows); appearance self-trained only on read-confirmed segments of the same window (for the other half).
+   Earlier plan, kept for reference: (b) Identity: cut
    tracklets at overlap episodes, measure piece purity against owner labels, identify pieces from fine-tuned reads
    plus appearance and relative position, rejoin across overlaps, score leave-one-window-out; then train the
    production reader on all labeled windows and write player_identity.csv / identity_segments.csv for clipF.
