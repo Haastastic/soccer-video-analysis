@@ -72,13 +72,37 @@ class Calibration:
         return self.anchor_h[anchor] @ self.cache.cum[a] @ self.cache.cum_inv[ci]
 
     def to_pitch(self, ci, x, y):
-        """Pitch coordinates of image points, with the seconds to the anchor that was used."""
+        """Pitch coordinates of image points, with the seconds to the nearest anchor.
+
+        Between two anchors the result is blended linearly in time from both, rather than switching to the nearer
+        one: with many anchors (pitch_autoanchor.py, one every 2 s) switching made positions jump by each
+        anchor's own small error, which read as movement (clipE noise floor 26 -> 39 m/min).
+        """
         ci = np.asarray(ci, dtype=int)
-        idx = self.nearest(ci)
+        order = np.argsort(self.anchor_ci)
+        sorted_ci = self.anchor_ci[order]
+        pos = np.searchsorted(sorted_ci, ci)
         out = np.zeros((len(ci), 2))
+        cache_h = {}
+
+        def at(frame, a):
+            key = (int(frame), int(a))
+            if key not in cache_h:
+                cache_h[key] = self.homography(int(frame), int(a))
+            return cache_h[key]
+
         for k in range(len(ci)):
-            out[k] = apply_h(self.homography(int(ci[k]), int(idx[k])), [[x[k], y[k]]])[0]
-        return out, np.abs(ci - self.anchor_ci[idx]) / self.cache.fps
+            lo, hi = pos[k] - 1, pos[k]
+            pt = [[x[k], y[k]]]
+            if lo < 0 or hi >= len(sorted_ci) or sorted_ci[hi] == ci[k]:
+                a = order[min(max(hi if hi < len(sorted_ci) else lo, 0), len(sorted_ci) - 1)]
+                if lo >= 0 and (hi >= len(sorted_ci) or abs(ci[k] - sorted_ci[lo]) < abs(ci[k] - sorted_ci[hi])):
+                    a = order[lo]
+                out[k] = apply_h(at(ci[k], a), pt)[0]
+            else:
+                w = (ci[k] - sorted_ci[lo]) / (sorted_ci[hi] - sorted_ci[lo])
+                out[k] = (1 - w) * apply_h(at(ci[k], order[lo]), pt)[0] + w * apply_h(at(ci[k], order[hi]), pt)[0]
+        return out, np.abs(ci - self.anchor_ci[self.nearest(ci)]) / self.cache.fps
 
     def cross_check(self, anchors: list) -> list:
         """Carry each anchor's points through every other anchor and report the error in meters."""
@@ -138,10 +162,14 @@ def apply_calibration(run: Path, anchors: list) -> dict:
     out = tr[["pf", "ci", "track_id"]].copy()
     out["X_m"], out["Y_m"], out["anchor_gap_s"] = xy[:, 0].round(2), xy[:, 1].round(2), gap.round(1)
     out.to_csv(run / "tracklet_pitch_xy.csv.gz", index=False)
+    # the cross-check is between the owner's anchors only: automatic ones (pitch_autoanchor.py, "auto": true) are
+    # snapped from them, so checking them against their own seeds would flatter the result
+    manual = [a for a in anchors if not a.get("auto")]
     report = {
-        "anchors": len(anchors),
-        "anchor_fit_rms_m": [round(r, 3) for r in cal.anchor_rms],
-        "cross_check": cal.cross_check(anchors),
+        "anchors": len(manual),
+        "auto_anchors": len(anchors) - len(manual),
+        "anchor_fit_rms_m": [round(r, 3) for r, a in zip(cal.anchor_rms, anchors, strict=True) if not a.get("auto")],
+        "cross_check": Calibration(cache, manual).cross_check(manual) if len(manual) > 1 else [],
         "rows": int(len(out)),
         "rows_within_10s_of_anchor_pct": round(100 * float((gap <= 10).mean()), 1),
         "note": "Camera motion is modeled as a similarity, so error grows with the time from an anchor.",
