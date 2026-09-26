@@ -7,3 +7,4 @@ pyyaml
 tabulate
 onnxruntime  # CPU build; only reid_cache.py needs it
 scikit-learn  # jersey_suggest.py
+scipy  # pitch_autoanchor.py
