@@ -29,6 +29,7 @@ import pandas as pd
 from sv_common import CAM_COLS, Cache, cache_stride, require_under_data
 
 ANCHORS_FILE = Path(__file__).resolve().parent / "pitch_anchors.local.json"
+PTZ_ERROR_M = 0.5  # pitch_ptz.py fixes: held-out owner anchors, median 0.2 to 0.36 m per window, worst 2.4 m
 
 
 def solve_anchor(points: list) -> tuple:
@@ -172,6 +173,10 @@ def apply_calibration(run: Path, anchors: list) -> dict:
         "cross_check": Calibration(cache, manual).cross_check(manual) if len(manual) > 1 else [],
         "rows": int(len(out)),
         "rows_within_10s_of_anchor_pct": round(100 * float((gap <= 10).mean()), 1),
+        # fixes from pitch_ptz.py carry no owner points to take an RMS from: their error was measured instead, on
+        # owner anchors held out of the camera fit (median 0.2 to 0.36 m in clipA, D, E)
+        "ptz": bool(anchors) and all(a.get("ptz") for a in anchors),
+        "position_error_floor_m": PTZ_ERROR_M if anchors and all(a.get("ptz") for a in anchors) else None,
         "note": "Camera motion is modeled as a similarity, so error grows with the time from an anchor.",
     }
     (run / "pitch_calibration_report.json").write_text(json.dumps(report, indent=2))

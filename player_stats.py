@@ -93,6 +93,8 @@ def smooth_steps(d: pd.DataFrame, fps: float) -> pd.DataFrame:
 def error_model(run: Path) -> tuple:
     """(floor_m, m_per_s): position error ~ max(anchor fit RMS, drift rate x seconds from the nearest anchor)."""
     rep = json.loads((run / "pitch_calibration_report.json").read_text())
+    if rep.get("position_error_floor_m"):  # automatic fixes every 2 s (pitch_ptz.py): measured error, no drift term
+        return float(rep["position_error_floor_m"]), 0.0
     rates = [c["median_error_m"] / c["gap_s"] for c in rep["cross_check"] if c["gap_s"] > 0]
     return float(np.median(rep["anchor_fit_rms_m"])), float(np.median(rates)) if rates else 0.0
 
