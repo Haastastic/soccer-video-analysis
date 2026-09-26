@@ -243,6 +243,21 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
     legibility: 5.6% of crops pass the legibility check vs 8.6% on clipF, so 1594 usable reads vs 2314 on the same
     number of crops. Why fewer crops are legible here is not established. Every identified number has reader
     training crops (the fewest: 10). UNVERIFIED: no owner labels on clipG, so accuracy is only the held-out estimate.
+- LINKING IDENTITY ACROSS TRACKLETS (exp10.py, 2026-09-26), TRIED, NOT ADOPTED. Unidentified stretches get the
+  identity of a player whose identified stretches before/after fit by motion on the pitch (2D Gaussian, sigma 1.5 m +
+  2 m/s x gap, up to 15 s), who is not identified elsewhere at the same time, plus appearance trained on the
+  window's read-confirmed samples; accepted only if it beats the runner-up and "someone else" (anywhere on the
+  pitch, flat appearance) by a margin. Two scoring bugs found on the way (candidates with evidence on one side
+  scored higher than with both; a lone candidate always accepted) made the first run look like 30 to 45%.
+  - Leave-one-window-out, held-out readers: margin 3, one round: +9.2 / +10.7 / +7.1 points of labeled time (E / A
+    / B) at 100 / 87.7 / 74.1% right (mean 87%). More rounds or lower margins add coverage at 70 to 84%; margin 5
+    or more leaves under 5 points. Read-based identity is 91 to 99.8%, so linking would dilute it.
+  - Why the ceiling is low: of labeled time left unidentified, 13 to 44% belongs to players never identified
+    anywhere in the window (no reads at all), 24 to 34% is over 15 s from that player's nearest identified stretch
+    (motion says nothing there), and only 25 to 45% has a usable candidate. Duplicate tracks and overlap conflicts
+    are rare (under 7%).
+  - What would move coverage: more players identified at all (the goalkeeper and the players with no reads), not
+    better linking. Appearance within a team stays weak (Phase 6: generic ReID separates teams, not teammates).
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
