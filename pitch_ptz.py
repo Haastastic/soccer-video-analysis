@@ -367,7 +367,7 @@ def load_anchor_sets(pairs: str) -> list:
     for item in pairs.split(","):
         # Separator is the first colon after a possible drive letter (C:\...).
         sep = item.find(":", 2)
-        run, path = (item[:sep], item[sep + 1:]) if sep >= 0 else (item, None)
+        run, path = (item[:sep], item[sep + 1 :]) if sep >= 0 else (item, None)
         run = Path(run)
         path = Path(path) if path else run / "pitch_anchors.local.json"
         anchors = [a for a in json.loads(path.read_text())["anchors"] if not a.get("auto") and len(a["points"]) >= 4]
@@ -539,8 +539,10 @@ def cmd_evaluate(args) -> None:
     fitted = {Path(p).resolve() for p in cam.get("fitted_from", [])}
     mirrored = this in {Path(p).resolve() for p in cam.get("mirrored_anchor_files", [])} or args.mirrored
     if this not in fitted and not args.mirrored:
-        print(f"warning: {args.anchors} was not used by fit, so its goal side is unknown; "
-              "pass --mirrored if it measures X from the other goal")
+        print(
+            f"warning: {args.anchors} was not used by fit, so its goal side is unknown; "
+            "pass --mirrored if it measures X from the other goal"
+        )
     rows = []
     for a in owner:
         img = np.array([p["img"] for p in a["points"]], float)
