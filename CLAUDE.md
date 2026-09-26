@@ -231,6 +231,18 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
     clipF players (69 s overlap): 91% agree, disagreements at switch boundaries. Two clipE players are absent and
     two new numbers appear, each with 49 to 60 confident reads on 5 to 6 tracklets: probably substitutions,
     UNVERIFIED. The goalkeeper got no reads at all (26 training crops; back rarely toward the camera) so has no clipF stats.
+- FIRST WINDOW WITH NO OWNER STEPS (clipG, 30:00 to 35:00, 2026-09-26). Checked first: density scan steady (about 20
+  people, players 50 to 115 px) and two downscaled stills showed live 11-a-side play. Then run_all.py, pitch_mask,
+  team_classify classify, tracklet_stitch, events, pitch_ptz run + pitch_calibrate apply, jersey_auto identify
+  --from A,B,E --write, player_stats (script: data/clipG_stages.sh, git-ignored). Owner time: none.
+  - Compute: detection 13 to 14 frames/s (about 11 min; the run's wall clock was 72 min, time not spent detecting,
+    probably the laptop sleeping), pitch_ptz 4.7 min, identify 9.4 min (reads and features), the rest under 1 min.
+  - Pitch: all 150 two-second frames fixed. Noise floor 27.3 m/min (clipF 21.5, clipE 17.8).
+  - Identity: 30.3% of target/goalkeeper samples identified (clipF 50.1%), 11 players, 54 stretches, 12.4 identified
+    player-minutes (clipF 20.5, clipE owner-labeled 34.0). Same tracklet count and box size as clipF; the drop is
+    legibility: 5.6% of crops pass the legibility check vs 8.6% on clipF, so 1594 usable reads vs 2314 on the same
+    number of crops. Why fewer crops are legible here is not established. Every identified number has reader
+    training crops (the fewest: 10). UNVERIFIED: no owner labels on clipG, so accuracy is only the held-out estimate.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
@@ -275,7 +287,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
    E, F, player_stats rerun. (b) DONE 2026-09-26: automatic identity (jersey_auto.py identify) with
    read-count trust, production reader, clipF identity written and stats rerun (Phase 8). Open, owner's call:
    raise coverage (about 40% held out, 50% on clipF) by linking identity across tracklets; the goalkeeper (no
-   reads); confirm the two probable clipF substitutions; a new window end to end with no owner steps.
+   reads); confirm the two probable clipF substitutions. DONE: a window end to end with no owner steps (clipG):
+   it works; identity coverage is the weak point (30% of target time) and falls as windows get harder to read.
 8. SUPERSEDED by 9 (owner chose full automation over timing manual steps). Next: window 25:00 to 30:00 as data\clipF, the first window using both jersey suggestions (Phase 7c) and automatic pitch anchors (Phase 7d); the point is to measure owner time against clipE's (anchors ~65 min, jersey ~85 min). Steps:
    a. python run_all.py --video <the game video in videos\> --start 00:25:00 --duration 300 --out data\clipF (detection ~11 min GPU, chosen tracker, ball linking), then pitch_mask.py, team_classify.py classify, tracklet_stitch.py, events.py on data\clipF. Check zoom volatility first (median 2 s scale change from the cache, Phase 7b).
    b. Owner: pitch_anchor_ui.py --run data\clipF, about ONE anchor per stretch where a penalty area is visible (record start/end times). Then pitch_autoanchor.py run --run data\clipF --anchors data\clipF\pitch_anchors.local.json; if its report lists uncovered stretches that show a box, owner adds an anchor there and it is rerun. Then pitch_calibrate.py apply --anchors data\clipF\pitch_anchors_auto.local.json.
