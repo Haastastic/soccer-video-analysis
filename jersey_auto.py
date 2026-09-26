@@ -25,6 +25,7 @@ Outputs (git-ignored, derived from footage of minors): RUN/jersey_auto_feats.npz
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -146,7 +147,8 @@ def number_reads(run: Path, finetuned: Path | None = None, read_ci: int = READ_C
     tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["ci", "track_id", "x1", "y1", "x2", "y2"])
     tr = tr[tr.track_id.isin(keep) & (tr.ci % read_ci == 0)].sort_values(["track_id", "ci"]).reset_index(drop=True)
     tag = (f"_{finetuned.stem}" if finetuned else "") + (f"_ci{read_ci}" if read_ci != READ_CI else "")
-    stamp = tracklet_fingerprint(tr, salt=f"reads:{read_ci}:{BACK}:{tag}")
+    weights = f"{finetuned.stat().st_size}:{finetuned.stat().st_mtime_ns}" if finetuned else ""  # retrained -> reread
+    stamp = tracklet_fingerprint(tr, salt=f"reads:{read_ci}:{BACK}:{tag}:{weights}")
     path, stamp_path = run / f"jersey_reads{tag}.csv.gz", run / f"jersey_reads{tag}.sha1"
     if path.exists() and stamp_path.exists() and stamp_path.read_text().strip() == stamp:
         return pd.read_csv(path, dtype={"text": str}, keep_default_na=False)
@@ -322,7 +324,10 @@ def cmd_identify(args) -> None:
     if run.resolve() in {s.resolve() for s in sources}:  # compare resolved: same folder, any spelling
         raise SystemExit("--from must not include --run: its own owner labels would leak into the evidence")
     s = identify(run, sources, args.reader)
-    y = truth(run, s) if (run / "player_identity.csv").exists() and not args.write else None
+    seg_path = run / "identity_segments.csv"
+    auto = seg_path.exists() and (pd.read_csv(seg_path).player_id.astype(str) == "auto").any()
+    owner_made = (run / "player_identity.csv").exists() and not auto  # never score our own output
+    y = truth(run, s) if owner_made and not args.write else None
     if y is not None and np.isfinite(y).any():
         m, t = np.isfinite(y), s.jersey.notna().to_numpy()
         print(
@@ -363,9 +368,13 @@ def labeled_patches(run: Path) -> tuple:
     import cv2
 
     path = run / "jersey_ft_patches.npz"
+    # tied to the owner's labels and the tracklets: relabeling (e.g. --redo-mixed) rebuilds the patches
+    labels = [run / n for n in ("player_identity.csv", "identity_segments.csv", "best_tracklets.csv.gz")]
+    stamp = hashlib.sha1(b"".join(p.read_bytes() for p in labels if p.exists())).hexdigest()
     if path.exists():
         z = np.load(path)
-        return z["P"], z["y"]
+        if "stamp" in z and str(z["stamp"]) == stamp:
+            return z["P"], z["y"]
     reads = number_reads(run)
     xy = pd.read_csv(run / "tracklet_pitch_xy.csv.gz", usecols=["pf", "ci", "track_id", "X_m", "Y_m", "anchor_gap_s"])
     ident = identity_rows(run, xy)[["ci", "track_id", "jersey"]].drop_duplicates(["ci", "track_id"])
@@ -380,7 +389,7 @@ def labeled_patches(run: Path) -> tuple:
         p = c[int(y0 * h) : max(int(y1 * h), int(y0 * h) + 2), int(x0 * w) : max(int(x1 * w), int(x0 * w) + 2)]
         P.append(cv2.resize(p, WIDE_PX, interpolation=cv2.INTER_CUBIC))
     P, y = np.stack(P), d.jersey.to_numpy(int)
-    np.savez_compressed(path, P=P, y=y)
+    np.savez_compressed(path, P=P, y=y, stamp=stamp)
     return P, y
 
 
@@ -442,7 +451,7 @@ def main() -> None:
     f.set_defaults(fn=cmd_features)
     f = sub.add_parser("finetune", help="fine-tune the jersey reader on owner-labeled windows")
     f.add_argument("--runs", required=True, help="comma list of labeled run folders")
-    f.add_argument("--out", type=Path, default=Path("models/jersey/parseq_ft_game.pt"))
+    f.add_argument("--out", type=Path, default=READER_FT)
     f.set_defaults(fn=cmd_finetune)
     f = sub.add_parser("identify", help="identify players in a window from reads, appearance and position")
     f.add_argument("--run", type=Path, required=True)
