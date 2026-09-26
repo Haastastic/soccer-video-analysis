@@ -319,7 +319,7 @@ def segments(s: pd.DataFrame) -> pd.DataFrame:
 def cmd_identify(args) -> None:
     run = require_under_data(args.run)
     sources = [require_under_data(Path(r)) for r in args.sources.split(",")]
-    if run in sources:
+    if run.resolve() in {s.resolve() for s in sources}:  # compare resolved: same folder, any spelling
         raise SystemExit("--from must not include --run: its own owner labels would leak into the evidence")
     s = identify(run, sources, args.reader)
     y = truth(run, s) if (run / "player_identity.csv").exists() and not args.write else None
