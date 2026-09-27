@@ -114,6 +114,14 @@ def metrics(s: pd.DataFrame, game: dict) -> tuple:
     counts = solid.groupby(level="jersey").size()
     spread = solid.groupby(level="jersey").rel.var()[counts >= 4]
     rel_sd = float(np.sqrt(spread.mean())) if len(spread) else 0.15
+    # the same ratio per (window, phase) and (window, half), from only the samples in that phase, against teammates
+    # in the same window and phase: a window that straddles a boundary must not count on both sides
+    s["half_name"] = "h" + s.half.astype(str)
+    split = {}
+    for col in ("phase", "half_name"):
+        q = s.groupby(["jersey", "run", col]).agg(v=("speed", "mean"), n=("speed", "size"), fps=("fps", "first"))
+        q["rel"] = q.v / q.groupby(["run", col]).v.transform("median")
+        split[col] = q
     rows = []
     for j, g in s.groupby("jersey"):
         fps = g.fps.iloc[0]
@@ -122,16 +130,9 @@ def metrics(s: pd.DataFrame, game: dict) -> tuple:
         p = per.loc[j]
         rel = float(np.average(p.rel, weights=p.n))
         ph = {}
-        for name, gg in g.groupby("phase"):
-            q = per.loc[j].loc[per.loc[j].index.isin(gg.run.unique())]
-            ph[name] = (len(gg) / fps / 60, float(np.average(q.rel, weights=q.n)) if len(q) else np.nan, solid_k(q))
-        for h in (1, 2):  # whole halves
-            q = p.loc[p.index.isin(g[g.half == h].run.unique())]
-            ph[f"h{h}"] = (
-                (g.half == h).sum() / fps / 60,
-                float(np.average(q.rel, weights=q.n)) if len(q) else np.nan,
-                solid_k(q),
-            )
+        for col, q in split.items():
+            for name, qq in q.loc[j].groupby(level=col):
+                ph[name] = (qq.n.sum() / fps / 60, float(np.average(qq.rel, weights=qq.n)), solid_k(qq))
         rows.append(
             dict(
                 jersey=int(j),
