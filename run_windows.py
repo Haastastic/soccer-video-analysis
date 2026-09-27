@@ -44,7 +44,7 @@ def stages(video: Path, run_dir: Path, start: str, labeled: list) -> list:
     r = run_dir
     auto_identity = r / "identity_segments.csv"
     return [
-        (r / "report.md", ["run_all.py", "--video", video, "--start", start, "--duration", "300", "--out", r]),
+        (r / "ball_path.csv", ["run_all.py", "--video", video, "--start", start, "--duration", "300", "--out", r]),
         (r / "tracklet_pitch.csv", ["pitch_mask.py", "--run", r]),
         (r / "tracklet_roles.csv", ["team_classify.py", "classify", "--run", r]),
         (r / "tracklet_stitch.csv", ["tracklet_stitch.py", "--run", r]),
