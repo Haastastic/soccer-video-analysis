@@ -17,8 +17,8 @@ Phase 7). Tips are observations to check on video, not verdicts.
 
 Needs data/game.local.json (halftime, our first-half goal end; see jersey_auto.py) and, per window, identity
 (player_identity.csv, identity_segments.csv), tracklet_pitch_xy.csv.gz, tracklet_roles.csv, ball_path.csv and
-pitch_anchors_ptz.local.json. Writes data/coaching/ (git-ignored: names of minors): one report per player,
-team_overview.md and player_metrics.csv.
+pitch_anchors_ptz.local.json. Writes data/coaching/ (git-ignored: names of minors): per player a Markdown report
+and a self-contained HTML page (coaching_html.py), plus index.html, team_overview.md and player_metrics.csv.
 
 Example:
   python coaching_tips.py --runs data\\clipH,data\\clipI,data\\clipJ,data\\clipA,data\\clipE,data\\clipF,data\\clipG,...
@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import coaching_html
 from jersey_auto import GAME_FILE, PITCH_CAMERA
 from pitch_calibrate import Calibration
 from player_stats import MAX_SPEED_MPS, ROSTER_FILE, SPEED_BANDS, identity_rows, smooth_steps
@@ -63,6 +64,7 @@ def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
     sign = np.where(second, -toward, toward)
     d["from_goal"] = np.where(sign > 0, d.x_s, length - d.x_s)
     d["abs_y"] = d.y_s.abs()
+    d["y_team"] = np.where(sign > 0, d.y_s, -d.y_s)  # mirrored with the ends, so a side stays the same side
     # team line: median position of every visible target-role player candidate at that moment (not just the named)
     roles = pd.read_csv(run / "tracklet_roles.csv")
     team_ids = roles[(roles.role == "target") & roles.player_candidate.astype(bool)].track_id
@@ -174,16 +176,21 @@ def confidence(minutes: float) -> str:
     return "high" if minutes >= 20 else "medium" if minutes >= 10 else "low"
 
 
+def peer_median(r: pd.Series, outfield: pd.DataFrame) -> pd.Series:
+    """Median of the other well-seen players in the same role (every outfield player if fewer than 2)."""
+    others = outfield[(outfield.jersey != r.jersey) & (outfield.minutes >= MIN_MINUTES)]
+    peer = others[others.role == r.role]
+    if len(peer) < 2:  # too few in this role to compare with: use every outfield player
+        peer = others
+    return peer.median(numeric_only=True)
+
+
 def tips_for(r: pd.Series, outfield: pd.DataFrame) -> list:
     """(kind, text, evidence) tips for one outfield player against the others in the same role."""
     out = []
     if r.minutes < MIN_MINUTES:
         return out
-    others = outfield[(outfield.jersey != r.jersey) & (outfield.minutes >= MIN_MINUTES)]
-    peer = others[others.role == r.role]
-    if len(peer) < 2:  # too few in this role to compare with: use every outfield player
-        peer = others
-    med = peer.median(numeric_only=True)
+    med = peer_median(r, outfield)
     # work rate (already relative to teammates in the same windows; 1.0 = team median)
     d = r.work_rel - 1.0
     work_thr = max(WORK_DIFF, 2 * r.rel_sd / np.sqrt(max(r.work_k, 1)))
@@ -349,7 +356,8 @@ def main() -> None:
     args = ap.parse_args()
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
     game = json.loads(GAME_FILE.read_text())
-    length = json.loads(PITCH_CAMERA.read_text())["length_m"]
+    cam = json.loads(PITCH_CAMERA.read_text())
+    length, width = cam["length_m"], cam["touchline_near_y"] - cam["touchline_far_y"]
     s = pd.concat([window_samples(r, game, length) for r in runs], ignore_index=True)
     m = metrics(s, game)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -364,16 +372,25 @@ def main() -> None:
         "| player | role | min | m/min | vs team | fast % | from goal m | depth m | near ball % | observations |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
+    tip_counts = {}
     for _, r in m.sort_values("minutes", ascending=False).iterrows():
-        tips = tips_for(r, outfield) if r.role != "goalkeeper" else []
+        keeper = r.role == "goalkeeper"  # no peers to compare with: numbers only
+        tips = [] if keeper else tips_for(r, outfield)
+        tip_counts[r.jersey] = len(tips)
         (OUT / f"player_{r.jersey:02d}.md").write_text(report(r, tips, len(runs)), encoding="utf-8")
+        med = pd.Series(dtype=float, index=m.columns).astype(float) if keeper else peer_median(r, outfield)
+        page = coaching_html.player_page(
+            r, tips, med, s[s.jersey == r.jersey], length, width, len(runs), confidence(r.minutes)
+        )
+        (OUT / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
         name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
         lines.append(
             f"| {name} | {r.role} | {r.minutes:.1f} | {r.m_per_min:.0f} | {r.work_rel:.2f} | "
             f"{r.pct_fast:.1f} | {r.from_goal:.0f} | {r.depth:+.0f} | {r.near_ball_pct:.0f} | {len(tips)} |"
         )
     (OUT / "team_overview.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"wrote {len(m)} player reports, team_overview.md and player_metrics.csv to {OUT}")
+    (OUT / "index.html").write_text(coaching_html.team_page(m, tip_counts, len(runs)), encoding="utf-8")
+    print(f"wrote {len(m)} player pages (.html and .md), index.html, team_overview.md, player_metrics.csv to {OUT}")
     print(
         m[["jersey", "role", "minutes", "work_rel", "pct_fast", "depth", "abs_y", "near_ball_pct"]]
         .round(2)

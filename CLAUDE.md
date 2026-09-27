@@ -326,6 +326,12 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   hand-set; UNVERIFIED like the running numbers, and phrased as observations to check on video.
 - What would make tips richer: more identified time per player (coverage), ball events (Phase 4), and more games
   (a player's pattern across games is far more trustworthy than one game's 5 to 40 minutes).
+- HTML pages (coaching_html.py, 2026-09-27): coaching_tips.py also writes data/coaching/index.html (team table,
+  roles ordered goalkeeper to forwards, players under 5 min muted) and player_NN.html per player: stat tiles vs the
+  role median, observations with evidence, a pitch heatmap of visible time (both halves, attacking to the right,
+  one blue ramp in 6 steps, hover values) and relative work rate per quarter of the game with +-2 SE whiskers and
+  the team line. Self-contained (inline SVG, a few lines of inline script for tooltips, no network requests), light
+  and dark themes. Local only: they carry names of minors. Checked by rendering in headless Edge, both themes.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
