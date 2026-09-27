@@ -304,6 +304,29 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   position as distance from our own goal (flips at halftime). UNVERIFIED like all running stats; noise floors
   differ by window (16.8 to 28.7 m/min), so compare players, not absolute values.
 
+## Phase 10: coaching tips (coaching_tips.py, 2026-09-27)
+- Owner's choice: tips for every player, on work rate, positioning, fatigue and involvement. Movement only: ball
+  events are too sparse (Phase 7). Output local (names of minors): data/coaching/ (a report per player,
+  team_overview.md, player_metrics.csv).
+- Measures, from every identified sample of 15 windows: work rate relative to identified teammates in the same
+  windows (cancels each window's noise floor); time at 4 m/s or faster; distance from our own goal, depth vs the
+  team line (median of visible target-role players, 4 or more), width, roam (10th to 90th percentile of depth on
+  the pitch); fatigue as early vs late in each half and first vs second half; involvement as time within 10 m of
+  the ball on detected ball positions (carried to the pitch with the window's automatic calibration).
+- Roles by thirds of depth vs the team line among well-seen outfield players (a fixed +-7 m made 12 of 19
+  midfielders: the camera shows part of the team, which compresses depth). Tips compare a player with the others
+  in the same role.
+- NOISE: a player's relative work rate varies window to window with sd 0.145 (windows with at least 1 min of the
+  player; including a few-second windows gave 0.30). Fatigue and work-rate tips must exceed 2 standard errors
+  given the windows behind each side, 19 to 27% for 2 to 4 windows per phase. With that, NO fatigue tip passes for
+  any player: the 10 to 13% late-half drops seen first were inside the noise. Intensity also needs 1.5 points,
+  involvement 5 points.
+- Result: 14 tips for 7 of the 15 players seen 5 min or more (3 work rate strengths, 2 + 2 intensity, 2
+  positioning, 1 + 2 involvement); 8 get "nothing stands out"; 4 players under 5 min get none. Thresholds are
+  hand-set; UNVERIFIED like the running numbers, and phrased as observations to check on video.
+- What would make tips richer: more identified time per player (coverage), ball events (Phase 4), and more games
+  (a player's pattern across games is far more trustworthy than one game's 5 to 40 minutes).
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -331,6 +354,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Stitch tracklets: tracklet_stitch.py --run <run> [--montage] (needs tracklet_roles.csv, tracklet_colors.csv; writes tracklet_stitch.csv)
 - Per-player stats: player_stats.py --runs data\clipA,data\clipB [--share-dir <folder>] (needs player_identity.csv, identity_segments.csv, tracklet_pitch_xy.csv.gz, events.csv; writes player_stats.csv, player_events.csv, stats_report.json per run and data/stats.sqlite)
 - Jersey suggestions for a new window: jersey_suggest.py suggest --run <run> --from <labeled runs> (DINOv2 on GPU; writes jersey_suggestions.csv, jersey_suggest.npz; jersey_label.py shows them). Score on a labeled window: jersey_suggest.py evaluate --run <run> --from <other runs>
+- Coaching tips for every identified player (local output data/coaching/): coaching_tips.py --runs <windows with identity> (needs data/game.local.json)
 - Process game windows end to end, no owner steps (resumable; skips stages whose output exists): run_windows.py --video <game.mp4> --windows clipH=00:00:00,... --labeled <owner-labeled windows> --stats-runs <other windows>
 - Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
 - Confirm rarely labeled jersey numbers (owner, a few minutes): jersey_rare_label.py candidates --runs <windows> --labeled <owner-labeled windows>, then jersey_rare_label.py label (one screen per number: click the crops that show it, Enter). Writes data/jersey_rare_truth.csv; jersey_auto.py finetune picks it up.
