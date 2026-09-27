@@ -15,8 +15,7 @@ import math
 import numpy as np
 import pandas as pd
 
-PITCH_W = 64.0  # metres across (touchlines about +-32 at this venue)
-CELL_X, CELL_Y = 5.0, 64.0 / 14  # heatmap cell size in metres
+CELL_X, N_CELLS_Y = 5.0, 14  # heatmap cells: 5 m along the pitch, the width in 14 rows
 # heatmap steps (CSS --heat-0..5): blue 150..650 on light; on dark, 600..250 so low values recede
 PHASES = [
     ("h1_early", "1st half, early"),
@@ -101,9 +100,9 @@ def page(title: str, body: str) -> str:
     )
 
 
-def pitch_lines(length: float) -> str:
-    """Pitch markings in metres; x from our goal (0) to theirs (length), y across (-32..32)."""
-    w, h = length, PITCH_W / 2
+def pitch_lines(length: float, width: float) -> str:
+    """Pitch markings in metres; x from our goal (0) to theirs (length), y across (-width/2..width/2)."""
+    w, h = length, width / 2
     box_w, box_d, six_w, six_d = 40.32 / 2, 16.5, 18.32 / 2, 5.5
     parts = [
         f'<rect x="0" y="{-h}" width="{w}" height="{2 * h}"/>',
@@ -116,12 +115,14 @@ def pitch_lines(length: float) -> str:
     return f'<g fill="none" stroke="var(--pitch-line)" stroke-width="0.35">{"".join(parts)}</g>'
 
 
-def heatmap_svg(x: np.ndarray, y: np.ndarray, length: float) -> tuple:
-    """(svg, legend html): share of visible time per cell, 6 quantized steps of one blue ramp."""
+def heatmap_svg(x: np.ndarray, y: np.ndarray, length: float, width: float) -> tuple:
+    """(svg, legend html): share of visible time per cell, 6 quantized steps of one blue ramp. width is the fitted
+    touchline-to-touchline distance (pitch_camera.local.json), centred on y = 0 (the fit is within 0.1 m of that)."""
+    half, cell_y = width / 2, width / N_CELLS_Y
     ok = np.isfinite(x) & np.isfinite(y)
-    x, y = np.clip(x[ok], 0, length - 1e-6), np.clip(y[ok], -PITCH_W / 2, PITCH_W / 2 - 1e-6)
-    nx, ny = int(math.ceil(length / CELL_X)), int(round(PITCH_W / CELL_Y))
-    hist, _, _ = np.histogram2d(x, y, bins=[nx, ny], range=[[0, length], [-PITCH_W / 2, PITCH_W / 2]])
+    x, y = np.clip(x[ok], 0, length - 1e-6), np.clip(y[ok], -half, half - 1e-6)
+    nx, ny = int(math.ceil(length / CELL_X)), N_CELLS_Y
+    hist, _, _ = np.histogram2d(x, y, bins=[nx, ny], range=[[0, length], [-half, half]])
     share = hist / max(hist.sum(), 1)
     top = share.max() if share.max() > 0 else 1
     edges = np.linspace(0, top, 7)[1:]  # 6 equal steps up to the busiest cell
@@ -134,21 +135,23 @@ def heatmap_svg(x: np.ndarray, y: np.ndarray, length: float) -> tuple:
                 continue
             step = int(np.searchsorted(edges, v, side="left"))
             step = min(step, 5)
-            x0, y0 = i * cw, -PITCH_W / 2 + j * CELL_Y
+            x0, y0 = i * cw, -half + j * cell_y
             cells.append(
-                f'<rect class="hit" x="{x0:.2f}" y="{y0:.2f}" width="{cw - 0.3:.2f}" height="{CELL_Y - 0.3:.2f}" '
+                f'<rect class="hit" x="{x0:.2f}" y="{y0:.2f}" width="{cw - 0.3:.2f}" height="{cell_y - 0.3:.2f}" '
                 f'rx="0.6" fill="var(--heat-{step})" data-tip="{100 * v:.1f}% of visible time here"/>'
             )
     pad = 4
     svg = (
-        f'<svg class="chart" viewBox="{-pad} {-PITCH_W / 2 - pad} {length + 2 * pad} {PITCH_W + 2 * pad + 6}" '
+        f'<svg class="chart" viewBox="{-pad} {-half - pad} {length + 2 * pad} {width + 2 * pad + 6}" '
         f'role="img" aria-label="Where the player spends visible time on the pitch; attacking to the right">'
-        f'<rect x="0" y="{-PITCH_W / 2}" width="{length}" height="{PITCH_W}" fill="var(--pitch)" rx="1"/>'
-        f"{''.join(cells)}{pitch_lines(length)}"
-        f'<text x="1" y="{PITCH_W / 2 + 5}" font-size="2.2" fill="var(--text-2)">Our goal</text>'
-        f'<text x="{length - 1}" y="{PITCH_W / 2 + 5}" font-size="2.2" fill="var(--text-2)" text-anchor="end">'
+        f'<rect x="0" y="{-half}" width="{length}" height="{width}" fill="var(--pitch)" rx="1"/>'
+        f"{''.join(cells)}{pitch_lines(length, width)}"
+        f'<text x="1" y="{half + 5}" font-size="2.2" fill="var(--text-2)">Our goal</text>'
+        f'<text x="{length - 1}" y="{half + 5}" font-size="2.2" fill="var(--text-2)" text-anchor="end">'
         "Attacking →</text></svg>"
     )
+    if not cells:  # no position data: say so, not a legend for cells that are not there
+        return svg, '<div class="legend">No position data for this player.</div>'
     legend = (
         '<div class="legend">Less time'
         + "".join(f'<span class="sw" style="background:var(--heat-{k})"></span>' for k in range(6))
@@ -230,11 +233,18 @@ def tile(label: str, value: str, compare: str) -> str:
 
 
 def player_page(
-    r: pd.Series, tips: list, med: pd.Series, samples: pd.DataFrame, length: float, n_windows: int, confidence: str
+    r: pd.Series,
+    tips: list,
+    med: pd.Series,
+    samples: pd.DataFrame,
+    length: float,
+    width: float,
+    n_windows: int,
+    confidence: str,
 ) -> str:
     name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
     role = r.role
-    heat, legend = heatmap_svg(samples.from_goal.to_numpy(), samples.y_team.to_numpy(), length)
+    heat, legend = heatmap_svg(samples.from_goal.to_numpy(), samples.y_team.to_numpy(), length, width)
 
     med_ok = bool(np.isfinite(med.get("depth", np.nan)))
 

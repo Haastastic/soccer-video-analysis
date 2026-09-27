@@ -356,7 +356,8 @@ def main() -> None:
     args = ap.parse_args()
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
     game = json.loads(GAME_FILE.read_text())
-    length = json.loads(PITCH_CAMERA.read_text())["length_m"]
+    cam = json.loads(PITCH_CAMERA.read_text())
+    length, width = cam["length_m"], cam["touchline_near_y"] - cam["touchline_far_y"]
     s = pd.concat([window_samples(r, game, length) for r in runs], ignore_index=True)
     m = metrics(s, game)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -379,7 +380,7 @@ def main() -> None:
         (OUT / f"player_{r.jersey:02d}.md").write_text(report(r, tips, len(runs)), encoding="utf-8")
         med = pd.Series(dtype=float, index=m.columns).astype(float) if keeper else peer_median(r, outfield)
         page = coaching_html.player_page(
-            r, tips, med, s[s.jersey == r.jersey], length, len(runs), confidence(r.minutes)
+            r, tips, med, s[s.jersey == r.jersey], length, width, len(runs), confidence(r.minutes)
         )
         (OUT / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
         name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
