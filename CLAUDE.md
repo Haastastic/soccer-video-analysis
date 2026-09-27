@@ -275,9 +275,13 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   75% (3 to 110 reads). So the owner confirms. `candidates` found 145 crops for 5 of the 7 rare numbers (roster,
   not goalkeeper, under 30 labeled crops) across clipA, B, E, F, G, skipping crops the owner already named; the
   other 2 numbers were never read (probably did not play). `label`: one screen per number, click the crops that
-  show it. `jersey_auto.py finetune` adds the confirmed crops (each repeated 4 times, jittered). WAITING ON THE
-  OWNER; after labeling: finetune, then identify --write again on clipF and clipG (the new weights force rereads)
-  and player_stats. Tool logic, resume and patch cutting tested; the window itself is untested by the owner.
+  show it. `jersey_auto.py finetune` adds the confirmed crops (each repeated 4 times, jittered).
+  - DONE 2026-09-27: owner labeled all 5 numbers in about 10 min (window load included). 31 of 145 candidates
+    confirmed (17, 8, 3, 3; one number 0 of 43: its candidates were all misreads). Reader retrained (4098 crops),
+    clipF and clipG reread and identified again, stats rerun. Small gain: clipF 54.8 -> 55.4%, clipG 33.5 -> 33.9%
+    of target/goalkeeper samples (+14 s and +8 s of identified time); the rare players simply play little in these
+    two windows. Not measurable held out (no labels on clipF/G). Worth repeating only when a new window shows
+    numbers the reader has not seen (candidates finds them).
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
