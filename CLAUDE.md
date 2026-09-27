@@ -283,6 +283,27 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
     two windows. Not measurable held out (no labels on clipF/G). Worth repeating only when a new window shows
     numbers the reader has not seen (candidates finds them).
 
+## Phase 9: the whole game, no owner steps (2026-09-27)
+- Live play from stills at boundaries (5 downscaled, deleted): first half 0:00 to about 36:00, halftime to about
+  43:30, second half to about 81:00; 82:30 is players leaving, 86:00 another game on the pitch. clipB (78:00 to
+  83:00) therefore holds about 2 min after the final whistle.
+- run_windows.py processed clipD's identity plus 9 new windows (clipH 00:00, clipI 05:00, clipJ 09:00, clipK 48:00,
+  clipL 53:00, clipM 58:00, clipN 63:00, clipO 68:00, clipP 73:00) with no errors, about 22 to 25 min each
+  (detection about 12, pitch_ptz about 6, identify about 3). With A, B, E, F, G: 15 windows covering 0 to 35 and 43
+  to 83 min. Gaps 19-20 and 35-36 min; clipJ overlaps clipI by 1 min (started at 09:00 to end where clipA begins).
+- Automatic identity per window: 34 to 55% of target/goalkeeper samples (first half 34 to 55, second half 34 to
+  55; no trend by half). 289 identified player-minutes, 19 roster numbers; one number with 6 s in one window is
+  probably a misread (the owner rejected all its rare-number candidates).
+- Goalkeeper in the second half: the appearance cutoff (0.3) kept nobody in 4 of 7 second-half windows (our
+  goalkeeper scores low in the other light). Now data/game.local.json (git-ignored) gives halftime and our first-half
+  goal end; with the end known the cutoff is 0.1 (held out unchanged: A 47.2%, B 44.9%, E 48.7% identified at 99.9,
+  91.3, 97.2% right). Second-half goalkeeper time 1.9 -> 3.2 min, first half 10.8. The rest looks genuine: most
+  second-half goalkeeper-role samples at our end are touchline people (|Y| about 33 m), and the owner's own clipB
+  labels show 14 s of goalkeeper in 5 min vs 56 to 87 s on clipA and clipE.
+- Whole-game per-player summary (local only): data/game_player_summary.csv, rates weighted by visible time,
+  position as distance from our own goal (flips at halftime). UNVERIFIED like all running stats; noise floors
+  differ by window (16.8 to 28.7 m/min), so compare players, not absolute values.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)

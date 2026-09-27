@@ -42,6 +42,9 @@ ROLES = ("target", "goalkeeper")
 PROD_READ_CI = 2  # every tracklet row: twice the reads of READ_CI, +2 to 12 points of identified time
 READER_FT = Path(__file__).resolve().parent / "models" / "jersey" / "parseq_ft_game.pt"
 PITCH_CAMERA = Path(__file__).resolve().parent / "data" / "pitch_camera.local.json"  # pitch_ptz.py fit
+# Game facts (git-ignored): {"halftime_min": M, "first_half_our_goal_x": 0 or the pitch length}. Teams swap ends at
+# halftime. When present, the goalkeeper rule uses the known end instead of guessing it from appearance.
+GAME_FILE = Path(__file__).resolve().parent / "data" / "game.local.json"
 MIN_LEGIBILITY, MIN_READ_CONF, P_READ = 0.5, 0.8, 0.9  # a read counts if both scores pass; P_READ: chance it is right
 W_APP, W_SELF_APP, W_POS = 0.3, 0.6, 0.5  # evidence weights against reads (log-probability scale)
 SWITCH_COST = 20.0  # switching only at box overlaps was tried and was no better (exp8.py)
@@ -311,6 +314,19 @@ def identify(run: Path, sources: list, reader_path: Path) -> pd.DataFrame:
 # (exp11.py): end right on all three windows; goalkeeper's labeled time found 100 / 64 / 99% (A / B / E), right
 # 100 / 100 / 93%.
 GK_BOX_M, GK_HALF_WIDTH_M, GK_MIN_P, GK_MIN_END_P, GK_TRACK_SHARE = 18.0, 25.0, 0.3, 0.2, 0.3
+# With the end known (GAME_FILE), appearance only has to rule out the obvious: in the second half it scores our
+# goalkeeper low (other light), so 0.3 kept nobody in 4 of 7 windows. clipB held out: p >= 0 found 78% at 100%.
+GK_MIN_P_KNOWN_END = 0.1
+
+
+def known_goal_end(run: Path, length: float) -> float | None:
+    """X of the goal our goalkeeper defends in this window, from GAME_FILE (None without one)."""
+    if not GAME_FILE.exists():
+        return None
+    game = json.loads(GAME_FILE.read_text())
+    first = float(game["first_half_our_goal_x"])
+    second_half = js.clip_mid_min(run) > float(game["halftime_min"])
+    return (length - first if first < length / 2 else 0.0) if second_half else first
 
 
 def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: list) -> tuple:
@@ -343,10 +359,12 @@ def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: li
     x, y = rows.X_m.to_numpy(), rows.Y_m.to_numpy()
     at = {0.0: (role == "goalkeeper") & (x < length / 2), length: (role == "goalkeeper") & (x >= length / 2)}
     mean_p = {end: p[m].mean() if m.any() else 0.0 for end, m in at.items()}
-    end = max(mean_p, key=mean_p.get)
-    if mean_p[end] < GK_MIN_END_P:
-        return gk, none  # neither end's goalkeeper looks like ours
-    cand = (role == "goalkeeper") & (np.abs(x - end) <= GK_BOX_M) & (np.abs(y) <= GK_HALF_WIDTH_M) & (p >= GK_MIN_P)
+    end, min_p = known_goal_end(run, length), GK_MIN_P_KNOWN_END
+    if end is None:  # no game file: the end whose goalkeeper-role people look more like ours
+        end, min_p = max(mean_p, key=mean_p.get), GK_MIN_P
+        if mean_p[end] < GK_MIN_END_P:
+            return gk, none  # neither end's goalkeeper looks like ours
+    cand = (role == "goalkeeper") & (np.abs(x - end) <= GK_BOX_M) & (np.abs(y) <= GK_HALF_WIDTH_M) & (p >= min_p)
     keep = np.zeros(len(rows), bool)
     idx = np.flatnonzero(cand)
     if len(idx):  # one goalkeeper per moment: the most goalkeeper-like candidate
