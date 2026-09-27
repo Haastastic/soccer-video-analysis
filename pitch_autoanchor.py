@@ -8,7 +8,7 @@ How: in each frame, a white top-hat finds thin bright lines (settings from a swe
 anchors: 85% of the true penalty-area lines found). The goal-end geometry (goal line, six-yard and 18-yard boxes,
 penalty arc; Law of the Game sizes, so no pitch size is assumed) is projected with the current estimate and a
 small homography correction is fitted, coarse to fine, so the projected lines sit on painted ones - only within a
-band around where they should be, so touchlines, goal frames and white kits stay out. Starting from each owner
+band around where they should be, so touchlines, goal frames and light-coloured kits stay out. Starting from each owner
 anchor, this is chained every STEP_S seconds in both directions: each frame starts from the previous accepted fit
 carried through 2 s of camera motion, which stays well inside what a snap can recover. A snap is accepted only if
 at least MIN_ON_LINE of the projected lines land on painted lines AND it moved the lines at most MAX_MOVE_PX from
