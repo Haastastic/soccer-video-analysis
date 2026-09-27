@@ -442,11 +442,17 @@ def labeled_patches(run: Path) -> tuple:
 
 
 def wide_patches(run: Path, keys: pd.DataFrame) -> np.ndarray:
-    """WIDE patches for rows (ci, track_id) of this window's tracklets, in row order."""
+    """WIDE patches, in row order, for rows with a box (ci, x1..y2) or for (ci, track_id) rows of this window's
+    current tracklets (every row must exist there)."""
     import cv2
 
-    tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["ci", "track_id", "x1", "y1", "x2", "y2"])
-    rows = keys[["ci", "track_id"]].merge(tr, on=["ci", "track_id"], how="left")
+    if {"x1", "y1", "x2", "y2"} <= set(keys.columns):
+        rows = keys[["ci", "x1", "y1", "x2", "y2"]]
+    else:
+        tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["ci", "track_id", "x1", "y1", "x2", "y2"])
+        rows = keys[["ci", "track_id"]].merge(tr, on=["ci", "track_id"], how="left")
+        if rows.x1.isna().any():  # a missing box would silently crop the whole frame
+            raise SystemExit(f"{run}: {int(rows.x1.isna().sum())} rows are not in best_tracklets.csv.gz")
     y0, y1, x0, x1 = WIDE
     P = []
     for c in js.box_crops(run, rows):
@@ -457,7 +463,8 @@ def wide_patches(run: Path, keys: pd.DataFrame) -> np.ndarray:
 
 
 def confirmed_rare_patches(truth_csv: Path) -> tuple:
-    """(wide patches, jersey) for crops the owner confirmed in jersey_rare_label.py."""
+    """(wide patches, jersey) for crops the owner confirmed in jersey_rare_label.py. The truth file keeps each
+    crop's box, so the crop is the one the owner saw even if the tracker is rerun and track ids change."""
     if not truth_csv.exists():
         return np.zeros((0, WIDE_PX[1], WIDE_PX[0], 3), np.uint8), np.zeros(0, int)
     t = pd.read_csv(truth_csv)

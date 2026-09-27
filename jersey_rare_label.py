@@ -58,7 +58,7 @@ WINDOW = "rare jersey confirm"
 HEADER_H = 22
 MIN_LEGIBILITY = 0.5
 PER_TRACKLET, MAX_PER_NUMBER = 3, 48
-TRUTH_COLS = ["run", "ci", "track_id", "number", "shows_number"]
+TRUTH_COLS = ["run", "ci", "track_id", "x1", "y1", "x2", "y2", "number", "shows_number"]  # box: the crop seen
 
 
 def rare_numbers(labeled: list, min_crops: int) -> list:
@@ -161,7 +161,8 @@ class Session:
         for i in sorted(self.done_items):
             number, crops = self.items[i]
             for p, c in enumerate(crops.itertuples()):
-                rows.append((c.run, int(c.ci), int(c.track_id), number, p in self.marks.get(i, set())))
+                marked = p in self.marks.get(i, set())
+                rows.append((c.run, int(c.ci), int(c.track_id), c.x1, c.y1, c.x2, c.y2, number, marked))
         return pd.DataFrame(rows, columns=TRUTH_COLS)
 
 
