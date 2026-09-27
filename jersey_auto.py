@@ -41,6 +41,7 @@ ROLES = ("target", "goalkeeper")
 # identify: settings chosen leave-one-window-out on clipA, B, E (exp8.py, exp9.py)
 PROD_READ_CI = 2  # every tracklet row: twice the reads of READ_CI, +2 to 12 points of identified time
 READER_FT = Path(__file__).resolve().parent / "models" / "jersey" / "parseq_ft_game.pt"
+PITCH_CAMERA = Path(__file__).resolve().parent / "data" / "pitch_camera.local.json"  # pitch_ptz.py fit
 MIN_LEGIBILITY, MIN_READ_CONF, P_READ = 0.5, 0.8, 0.9  # a read counts if both scores pass; P_READ: chance it is right
 W_APP, W_SELF_APP, W_POS = 0.3, 0.6, 0.5  # evidence weights against reads (log-probability scale)
 SWITCH_COST = 20.0  # switching only at box overlaps was tried and was no better (exp8.py)
@@ -296,7 +297,62 @@ def identify(run: Path, sources: list, reader_path: Path) -> pd.DataFrame:
         pred, stretch = decode(rows, lp_read + W_SELF_APP * appearance_logp(own, F, roster) + W_POS * lp_pos)
         ok, _ = trusted(rows, reads, roster[pred], stretch, ci_per_s)
     _, n_ag = trusted(rows, reads, roster[pred], stretch, ci_per_s)
-    return rows.assign(jersey=np.where(ok, roster[pred], np.nan), agree_reads=n_ag, stretch=stretch)
+    jersey = np.where(ok, roster[pred], np.nan)
+    gk_jersey, gk = goalkeeper_samples(run, rows, F, sources)
+    gk &= ~ok  # a trusted read wins
+    jersey[gk] = gk_jersey
+    return rows.assign(jersey=jersey, agree_reads=n_ag, stretch=stretch, by_goalkeeper_rule=gk)
+
+
+# The goalkeeper's back is rarely toward the camera (no reads on clipF), so the roster's one goalkeeper is found by
+# role, place and look instead: team_classify's goalkeeper role, inside our penalty box, looking like our goalkeeper
+# (DINOv2 + logistic regression on the labeled windows' goalkeeper vs everyone else labeled or goalkeeper-role).
+# "Our end" is the end whose goalkeeper-role people look more like our goalkeeper. Leave-one-window-out
+# (exp11.py): end right on all three windows; goalkeeper's labeled time found 100 / 64 / 99% (A / B / E), right
+# 100 / 100 / 93%.
+GK_BOX_M, GK_HALF_WIDTH_M, GK_MIN_P, GK_MIN_END_P, GK_TRACK_SHARE = 18.0, 25.0, 0.3, 0.2, 0.3
+
+
+def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: list) -> tuple:
+    """(goalkeeper's jersey, per-sample flag) for samples taken to be our goalkeeper."""
+    from sklearn.linear_model import LogisticRegression
+
+    roster = pd.read_csv(ROSTER_FILE)
+    keepers = roster[roster.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
+    none = np.zeros(len(rows), bool)
+    if len(keepers) != 1:
+        return None, none  # the rule assumes one goalkeeper on the roster
+    gk = int(keepers.iloc[0])
+    t0 = js.clip_mid_min(run)
+    X, Y, W = [], [], []
+    for src in sources:
+        rows2, F2 = sample_features(src)
+        y2 = truth(src, rows2)
+        role2 = rows2.track_id.map(pd.read_csv(src / "tracklet_roles.csv").set_index("track_id").role)
+        m = np.isfinite(y2) | (role2 == "goalkeeper").to_numpy()
+        X.append(F2[m])
+        Y.append((y2[m] == gk).astype(int))
+        W.append(np.full(m.sum(), np.exp(-abs(js.clip_mid_min(src) - t0) / js.TAU_MIN)))
+    Y_all = np.concatenate(Y)
+    if Y_all.sum() < 5:
+        return gk, none  # the labeled windows barely show the goalkeeper
+    clf = LogisticRegression(max_iter=4000, C=js.C, class_weight="balanced")
+    p = clf.fit(np.concatenate(X), Y_all, sample_weight=np.concatenate(W)).predict_proba(F)[:, 1]
+    length = json.loads(PITCH_CAMERA.read_text())["length_m"]
+    role = rows.track_id.map(pd.read_csv(run / "tracklet_roles.csv").set_index("track_id").role).to_numpy()
+    x, y = rows.X_m.to_numpy(), rows.Y_m.to_numpy()
+    at = {0.0: (role == "goalkeeper") & (x < length / 2), length: (role == "goalkeeper") & (x >= length / 2)}
+    mean_p = {end: p[m].mean() if m.any() else 0.0 for end, m in at.items()}
+    end = max(mean_p, key=mean_p.get)
+    if mean_p[end] < GK_MIN_END_P:
+        return gk, none  # neither end's goalkeeper looks like ours
+    cand = (role == "goalkeeper") & (np.abs(x - end) <= GK_BOX_M) & (np.abs(y) <= GK_HALF_WIDTH_M) & (p >= GK_MIN_P)
+    keep = np.zeros(len(rows), bool)
+    idx = np.flatnonzero(cand)
+    if len(idx):  # one goalkeeper per moment: the most goalkeeper-like candidate
+        keep[pd.Series(p[idx], index=idx).groupby(rows.ci.to_numpy()[idx]).idxmax().to_numpy()] = True
+    share = pd.Series(keep).groupby(rows.track_id.to_numpy()).transform("mean").to_numpy()
+    return gk, keep & (share >= GK_TRACK_SHARE)
 
 
 def segments(s: pd.DataFrame) -> pd.DataFrame:
@@ -360,13 +416,13 @@ def cmd_identify(args) -> None:
 WIDE = (0.05, 0.50, 0.10, 0.90)
 WIDE_PX = (192, 96)
 FT_EPOCHS, FT_LR, FT_BATCH = 8, 2e-5, 48
+RARE_TRUTH = Path(__file__).resolve().parent / "data" / "jersey_rare_truth.csv"  # jersey_rare_label.py
+RARE_REPEAT = 4  # each confirmed rare crop is seen this many times per epoch (jittered differently each time)
 
 
 def labeled_patches(run: Path) -> tuple:
     """(wide patches, owner jersey) for read crops the legibility model half-accepts, cached in
     RUN/jersey_ft_patches.npz."""
-    import cv2
-
     path = run / "jersey_ft_patches.npz"
     # tied to the owner's labels and the tracklets: relabeling (e.g. --redo-mixed) rebuilds the patches
     labels = [run / n for n in ("player_identity.csv", "identity_segments.csv", "best_tracklets.csv.gz")]
@@ -380,17 +436,46 @@ def labeled_patches(run: Path) -> tuple:
     ident = identity_rows(run, xy)[["ci", "track_id", "jersey"]].drop_duplicates(["ci", "track_id"])
     d = reads.merge(ident, on=["ci", "track_id"])
     d = d[d.legibility >= 0.3].reset_index(drop=True)
-    tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["ci", "track_id", "x1", "y1", "x2", "y2"])
-    rows = d[["ci", "track_id"]].merge(tr, on=["ci", "track_id"])
+    P, y = wide_patches(run, d[["ci", "track_id"]]), d.jersey.to_numpy(int)
+    np.savez_compressed(path, P=P, y=y, stamp=stamp)
+    return P, y
+
+
+def wide_patches(run: Path, keys: pd.DataFrame) -> np.ndarray:
+    """WIDE patches, in row order, for rows with a box (ci, x1..y2) or for (ci, track_id) rows of this window's
+    current tracklets (every row must exist there)."""
+    import cv2
+
+    if {"x1", "y1", "x2", "y2"} <= set(keys.columns):
+        rows = keys[["ci", "x1", "y1", "x2", "y2"]]
+    else:
+        tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["ci", "track_id", "x1", "y1", "x2", "y2"])
+        rows = keys[["ci", "track_id"]].merge(tr, on=["ci", "track_id"], how="left")
+        if rows.x1.isna().any():  # a missing box would silently crop the whole frame
+            raise SystemExit(f"{run}: {int(rows.x1.isna().sum())} rows are not in best_tracklets.csv.gz")
     y0, y1, x0, x1 = WIDE
     P = []
     for c in js.box_crops(run, rows):
         h, w = c.shape[:2]
         p = c[int(y0 * h) : max(int(y1 * h), int(y0 * h) + 2), int(x0 * w) : max(int(x1 * w), int(x0 * w) + 2)]
         P.append(cv2.resize(p, WIDE_PX, interpolation=cv2.INTER_CUBIC))
-    P, y = np.stack(P), d.jersey.to_numpy(int)
-    np.savez_compressed(path, P=P, y=y, stamp=stamp)
-    return P, y
+    return np.stack(P)
+
+
+def confirmed_rare_patches(truth_csv: Path) -> tuple:
+    """(wide patches, jersey) for crops the owner confirmed in jersey_rare_label.py. The truth file keeps each
+    crop's box, so the crop is the one the owner saw even if the tracker is rerun and track ids change."""
+    if not truth_csv.exists():
+        return np.zeros((0, WIDE_PX[1], WIDE_PX[0], 3), np.uint8), np.zeros(0, int)
+    t = pd.read_csv(truth_csv)
+    t = t[t.shows_number.astype(bool)]
+    Ps, ys = [], []
+    for run_name, g in t.groupby("run"):
+        Ps.append(wide_patches(require_under_data(truth_csv.parent / run_name), g))
+        ys.append(g.number.to_numpy(int))
+    if not Ps:
+        return np.zeros((0, WIDE_PX[1], WIDE_PX[0], 3), np.uint8), np.zeros(0, int)
+    return np.concatenate(Ps), np.concatenate(ys)
 
 
 def back_batch(P: np.ndarray, rng, jitter: bool):
@@ -421,6 +506,13 @@ def cmd_finetune(args) -> None:
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
     data = [labeled_patches(require_under_data(Path(r))) for r in args.runs.split(",")]
+    Pr, Yr = confirmed_rare_patches(args.rare)
+    if len(Yr):  # repeated so a few confirmed crops weigh like a labeled player's
+        rep = int(np.clip(RARE_REPEAT, 1, None))
+        data.append((np.repeat(Pr, rep, axis=0), np.repeat(Yr, rep)))
+        print(
+            f"adding {len(Yr)} owner-confirmed crops of rare numbers (x{rep}): {pd.Series(Yr).value_counts().to_dict()}"
+        )
     P, Y = np.concatenate([d[0] for d in data]), np.concatenate([d[1] for d in data])
     parseq, _leg, dev, _ = reader()
     parseq.log = lambda *a, **k: None
@@ -452,6 +544,7 @@ def main() -> None:
     f = sub.add_parser("finetune", help="fine-tune the jersey reader on owner-labeled windows")
     f.add_argument("--runs", required=True, help="comma list of labeled run folders")
     f.add_argument("--out", type=Path, default=READER_FT)
+    f.add_argument("--rare", type=Path, default=RARE_TRUTH, help="owner-confirmed rare crops (jersey_rare_label.py)")
     f.set_defaults(fn=cmd_finetune)
     f = sub.add_parser("identify", help="identify players in a window from reads, appearance and position")
     f.add_argument("--run", type=Path, required=True)

@@ -258,6 +258,26 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
     are rare (under 7%).
   - What would move coverage: more players identified at all (the goalkeeper and the players with no reads), not
     better linking. Appearance within a team stays weak (Phase 6: generic ReID separates teams, not teammates).
+- GOALKEEPER BY ROLE, PLACE AND LOOK (exp11.py -> jersey_auto.py goalkeeper_samples, 2026-09-27). The goalkeeper's
+  back rarely faces the camera (no reads on clipF). The goalkeeper's labeled tracklets get team_classify's
+  goalkeeper role (all on A and E, 78% on B) and stay within about 7 m of the goal line. Rule: goalkeeper-role
+  samples within 18 m of our goal line and 25 m of the centre line across, goalkeeper appearance >= 0.3 (DINOv2 +
+  logistic regression, our goalkeeper vs everyone else labeled or goalkeeper-role in the labeled windows), one per
+  moment, tracklets mostly kept. "Our end" = the end whose goalkeeper-role people look more like our goalkeeper:
+  right on all three windows, both halves. A trusted read always wins.
+  - Held out (goalkeeper's own labeled time): found 100 / 64 / 99% (A / B / E), right 100 / 100 / 93%. Whole
+    identify, held out: identified 40.6 -> 47.2% (A), 43.4 -> 44.7% (B), 39.4 -> 48.4% (E); right 99.8 -> 99.9,
+    91.0 -> 91.3, 98.4 -> 97.5%.
+  - Applied: clipF 50.1 -> 54.8%, clipG 30.3 -> 33.5% of target/goalkeeper samples; the goalkeeper now has stats
+    there (113 s and 80 s visible, 47 and 39 m/min, near the noise floor as for a keeper).
+- RARE NUMBERS: OWNER CONFIRMS A FEW CROPS (jersey_rare_label.py, 2026-09-27). The original (not fine-tuned) reader
+  cannot label rare numbers by itself: its confident reads of numbers rare in the other windows were right 0 to
+  75% (3 to 110 reads). So the owner confirms. `candidates` found 145 crops for 5 of the 7 rare numbers (roster,
+  not goalkeeper, under 30 labeled crops) across clipA, B, E, F, G, skipping crops the owner already named; the
+  other 2 numbers were never read (probably did not play). `label`: one screen per number, click the crops that
+  show it. `jersey_auto.py finetune` adds the confirmed crops (each repeated 4 times, jittered). WAITING ON THE
+  OWNER; after labeling: finetune, then identify --write again on clipF and clipG (the new weights force rereads)
+  and player_stats. Tool logic, resume and patch cutting tested; the window itself is untested by the owner.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
@@ -287,6 +307,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Per-player stats: player_stats.py --runs data\clipA,data\clipB [--share-dir <folder>] (needs player_identity.csv, identity_segments.csv, tracklet_pitch_xy.csv.gz, events.csv; writes player_stats.csv, player_events.csv, stats_report.json per run and data/stats.sqlite)
 - Jersey suggestions for a new window: jersey_suggest.py suggest --run <run> --from <labeled runs> (DINOv2 on GPU; writes jersey_suggestions.csv, jersey_suggest.npz; jersey_label.py shows them). Score on a labeled window: jersey_suggest.py evaluate --run <run> --from <other runs>
 - Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
+- Confirm rarely labeled jersey numbers (owner, a few minutes): jersey_rare_label.py candidates --runs <windows> --labeled <owner-labeled windows>, then jersey_rare_label.py label (one screen per number: click the crops that show it, Enter). Writes data/jersey_rare_truth.csv; jersey_auto.py finetune picks it up.
 - Identify players by hand: jersey_label.py label --run <run> [--redo-mixed], then jersey_label.py apply --run <run> (needs roster.csv, tracklet_stitch.csv; writes jersey_truth.csv, jersey_tracklets.csv, player_identity.csv). Stitched players show their tracklets (T1, T2, a yellow bar at each join); click a crop to name just that tracklet, shift+click a crop to split its tracklet where another person starts (parts T1a/T1b, magenta bar; frames around the switch get no identity), then x or Enter finishes the player as "split". apply also writes identity_segments.csv (named parts of split tracklets as ci ranges). --redo-mixed re-opens players marked mixed to name their tracklets.
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
