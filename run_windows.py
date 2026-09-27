@@ -47,6 +47,7 @@ def stages(video: Path, run_dir: Path, start: str, labeled: list) -> list:
         (r / "ball_path.csv", ["run_all.py", "--video", video, "--start", start, "--duration", "300", "--out", r]),
         (r / "tracklet_pitch.csv", ["pitch_mask.py", "--run", r]),
         (r / "tracklet_roles.csv", ["team_classify.py", "classify", "--run", r]),
+        # not used by automatic identity; about 1 s, and it keeps jersey_label.py available for a manual spot check
         (r / "tracklet_stitch.csv", ["tracklet_stitch.py", "--run", r]),
         (r / "events.csv", ["events.py", "--run", r]),
         (r / "pitch_anchors_ptz.local.json", ["pitch_ptz.py", "run", "--run", r]),
