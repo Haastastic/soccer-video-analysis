@@ -90,7 +90,7 @@ def patch_lab(img, x1, y1, x2, y2):
     """Median Lab of the non-grass pixels in a patch, or NaNs if too few remain.
 
     The cached colors are medians over the whole patch, which on players 35 to 60 px tall is mostly grass
-    and skin. Masking bright saturated green (dark green kit stays) removes most of that contamination.
+    and skin. Masking bright saturated green (dark kits stay) removes most of that contamination.
     """
     x1, y1 = max(int(x1), 0), max(int(y1), 0)
     x2, y2 = min(int(x2), img.shape[1]), min(int(y2), img.shape[0])
