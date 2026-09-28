@@ -213,21 +213,30 @@ def cmd_setup(args) -> None:
     camera = folder / "pitch_camera.local.json"
     if not camera.exists():
         shutil.copy(PREVIOUS_CAMERA, camera)
-    # kits first: classifying needs this game's kit colours, so stop before it until they exist
-    pilot = run_stages(video, args.game, name, start, upto="team_classify.py")
+    # kits first: classifying needs this game's kit colours, so stop before it until they exist. Colours drift
+    # between halves as the light changes (both games so far: the first half's prototypes read many second-half
+    # players as goalkeeper or unknown), so a pilot in each half is mapped; `assign` adds to the same file.
     kits = folder / "kit_prototypes.local.json"
-    if not kits.exists():
-        run(["team_classify.py", "calibrate", "--run", pilot])
-        raise SystemExit(
-            f"Kit colours: look at {pilot / 'kit_clusters.png'} (local only) and map the clusters to roles:\n"
-            f"  python team_classify.py assign --run {pilot} --map 0:target,1:opponent,...\n"
-            f"(it writes {kits}), then run `setup` again."
-        )
-    roles = pilot / "tracklet_roles.csv"
-    if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
-        # classified with other kit colours before: redo roles and what depends on them
-        for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
-            (pilot / stale).unlink(missing_ok=True)
+    second = [w for w in windows(g) if parse_time(w[1]) >= parse_time(g["second_half"][0])]
+    pilots = [(name, start)] + ([second[len(second) // 2]] if second else [])
+    for pname, pstart in pilots:
+        p = run_stages(video, args.game, pname, pstart, upto="team_classify.py")
+        clusters = p / "kit_clusters.json"
+        mapped = clusters.exists() and kits.exists() and kits.stat().st_mtime > clusters.stat().st_mtime
+        if not mapped:
+            if not clusters.exists():
+                run(["team_classify.py", "calibrate", "--run", p])
+            raise SystemExit(
+                f"Kit colours ({pname}): look at {p / 'kit_clusters.png'} (local only) and map the clusters:\n"
+                f"  python team_classify.py assign --run {p} --map 0:target,1:opponent,...\n"
+                f"(it adds to {kits}), then run `setup` again."
+            )
+        roles = p / "tracklet_roles.csv"
+        if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
+            # classified with other kit colours before: redo roles and what depends on them
+            for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
+                (p / stale).unlink(missing_ok=True)
+    pilot = game_folder(args.game) / name
     # then the pitch: the pilot through the camera fit, not identity yet
     run_stages(video, args.game, name, start, upto="pitch_calibrate.py")
     ok, summary = pitch_ok(pilot)
