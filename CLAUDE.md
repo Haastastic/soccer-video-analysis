@@ -388,6 +388,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Kits drift between halves (game 2 second half: 83 player tracks read as goalkeeper, 65 unknown with the
   first-half prototypes). Mapping a second-half pilot too (assign adds prototypes): 8 target, 10 opponent, 1 keeper,
   1 official per frame. new_game.py setup now maps a pilot in each half.
+- Speed: new_game.py run processes windows in parallel (--workers, default 3). Two detections at once barely slow
+  each other on the laptop GPU (11.6 vs 11.3 min per window), the pitch fit is CPU work (16 threads), and GPU
+  memory was 1.7 of 6 GB. Windows whose roles predate the kit file are redone automatically.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
