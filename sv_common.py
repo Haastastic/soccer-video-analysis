@@ -349,13 +349,17 @@ class ZoomView:
     Tools with their own left clicks call on_mouse() first (it returns True when it used the event, e.g. a click
     on a scroll bar) and map other clicks with to_content(). Put text in add_footer(), not over the content.
     reserve_h: pixels the caller adds above/below the zoomed content (header, footer), kept on screen too.
+    base: display scale at 1x. The single-frame labelers (event_label.py, ball_label.py) pass full-resolution frames
+    with base < 1, so 1x fits the screen and zooming shows real detail instead of an enlarged small image.
+    Owner rule (2026-09-28): every labeling window grows with zoom until the screen constrains it.
     """
 
     STEP = 1.25
     MAX = 8.0
     BAR = SCROLL_BAR
 
-    def __init__(self, reserve_h: int = FOOTER_H):
+    def __init__(self, reserve_h: int = FOOTER_H, base: float = 1.0):
+        self.base = base
         self.max_w, self.max_h = screen_size()
         self.max_h -= reserve_h
         self.zoom = 1.0
@@ -367,12 +371,17 @@ class ZoomView:
     def reset(self) -> None:
         self.zoom, self.x0, self.y0 = 1.0, 0.0, 0.0
 
+    @property
+    def mag(self) -> float:
+        """Window pixels per content pixel."""
+        return self.base * self.zoom
+
     def _view(self) -> tuple:
         """Visible content size, in content pixels."""
-        return self.area[0] / self.zoom, self.area[1] / self.zoom
+        return self.area[0] / self.mag, self.area[1] / self.mag
 
     def to_content(self, mx: float, my: float) -> tuple:
-        return self.x0 + mx / self.zoom, self.y0 + my / self.zoom
+        return self.x0 + mx / self.mag, self.y0 + my / self.mag
 
     def _scroll_to(self, bar: str, m: float) -> None:
         vw, vh = self._view()
@@ -387,7 +396,7 @@ class ZoomView:
             px, py = self.to_content(mx, my)
             factor = self.STEP if flags > 0 else 1 / self.STEP
             self.zoom = float(np.clip(self.zoom * factor, 1.0, self.MAX))
-            self.x0, self.y0 = px - mx / self.zoom, py - my / self.zoom  # keep the point under the cursor
+            self.x0, self.y0 = px - mx / self.mag, py - my / self.mag  # keep the point under the cursor
             return True
         if event == cv2.EVENT_RBUTTONDOWN:
             px, py = self.to_content(mx, my)
@@ -415,7 +424,7 @@ class ZoomView:
     def apply(self, content: np.ndarray) -> np.ndarray:
         h, w = content.shape[:2]
         self.content_size = (w, h)
-        zw, zh = w * self.zoom, h * self.zoom
+        zw, zh = w * self.mag, h * self.mag
         # scroll bars get their own strips, so they never cover content; the window widens (or heightens) by a
         # bar's thickness when there is room, and a bar only appears when content is really hidden
         hbar = vbar = False
@@ -432,7 +441,8 @@ class ZoomView:
         self.y0 = float(np.clip(self.y0, 0, max(0.0, h - vh)))
         crop = content[int(self.y0) : int(np.ceil(self.y0 + vh)), int(self.x0) : int(np.ceil(self.x0 + vw))]
         if crop.shape[1] != aw or crop.shape[0] != ah:
-            crop = cv2.resize(crop, (aw, ah), interpolation=cv2.INTER_CUBIC)
+            shrink = crop.shape[1] > aw
+            crop = cv2.resize(crop, (aw, ah), interpolation=cv2.INTER_AREA if shrink else cv2.INTER_CUBIC)
         out = np.full((out_h, out_w, 3), 40, np.uint8)
         out[:ah, :aw] = crop
         thumb = (190, 190, 190)
