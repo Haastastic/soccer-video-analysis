@@ -46,7 +46,7 @@ from scipy.optimize import least_squares
 from pitch_autoanchor import line_mask
 from pitch_calibrate import Calibration
 from pitch_mask import grass_mask
-from sv_common import Cache, cache_stride, read_frames, require_under_data
+from sv_common import Cache, cache_stride, game_file, read_frames, require_under_data
 
 CAMERA_FILE = Path(__file__).resolve().parent / "data" / "pitch_camera.local.json"
 STEP_S = 2.0
@@ -496,6 +496,80 @@ def cmd_fit(args) -> None:
     print(json.dumps(cam, indent=2))
 
 
+REFIT_FRAMES = 24  # frames per refit: the best-scoring fixes, spread over the pan range
+
+
+def cmd_refit(args) -> None:
+    """Refit the camera position for another game at the same venue, with no owner anchors.
+
+    The tripod stands a little differently each game, so a camera fitted on one game fixes fewer frames of the
+    next (a window of the second game: 77% fixed, 34 of 150 rejected, against 89 to 100% on the first). The pitch
+    is the same, so its length and touchlines stay; only the camera centre moves. Start from the frames this camera
+    did fix in the new game (after `run` on a window), then move the centre and every frame's pose together until
+    the painted lines sit on paint in all of them (the line stage of `fit`, without owner points). Check by
+    running `run` again with the refitted camera: the share of frames fixed should come back to about 90% or more.
+    """
+    cam = json.loads(args.camera.read_text())
+    frames = []
+    for r in args.runs.split(","):
+        run = require_under_data(Path(r))
+        poses = pd.read_csv(run / "pitch_ptz_poses.csv")
+        ok = poses[poses.how != "rejected"].copy()
+        # spread over the pan range: best score in each pan band, so both ends and midfield take part
+        ok["band"] = pd.cut(ok.pan, 8, labels=False)
+        pick = ok.sort_values("score", ascending=False).groupby("band").head(max(1, REFIT_FRAMES // 8))
+        frames += [(run, row) for row in pick.itertuples()]
+    frames = frames[: args.max_frames]
+    maps = []
+    for run in {f[0] for f in frames}:
+        stride = cache_stride(run)
+        want = {int(f[1].ci) * stride: k for k, f in enumerate(frames) if f[0] == run}
+        for fno, img in read_frames(run / "clip.mp4", list(want)):
+            maps.append((want[fno], distance_map(img)))
+    maps.sort()
+    Q0 = np.array([[f[1].pan, f[1].tilt, np.log(f[1].focal_px), f[1].roll] for f in frames])
+    print(f"refit on {len(frames)} fixed frames of {args.runs}; start centre {cam['centre_m']}")
+
+    def resid(z):
+        c = dict(cam, centre_m=z[:3])
+        m = Model(c, 1.0)
+        Q = z[3:].reshape(-1, 4)
+        out = []
+        for i, d in maps:
+            uv = project(m.rel, Q[i], (960, 540))
+            h, w = d.shape
+            ok = np.isfinite(uv[:, 0]) & (uv[:, 0] > 1) & (uv[:, 0] < w - 2) & (uv[:, 1] > 1) & (uv[:, 1] < h - 2)
+            rr = np.zeros(len(m.rel))  # line points off the frame say nothing about this frame
+            rr[ok] = np.minimum(map_coordinates(d, [uv[ok, 1], uv[ok, 0]], order=1), TRUNC_PX)
+            out.append(rr)
+        return np.concatenate(out)
+
+    z0 = np.r_[cam["centre_m"], Q0.ravel()]
+    lo = [c - args.max_move_m for c in cam["centre_m"]] + [BOUNDS[0][i % 4] for i in range(Q0.size)]
+    hi = [c + args.max_move_m for c in cam["centre_m"]] + [BOUNDS[1][i % 4] for i in range(Q0.size)]
+    before = np.median(resid(z0))
+    z = least_squares(resid, np.clip(z0, lo, hi), bounds=(lo, hi), loss="soft_l1", f_scale=3,
+                      max_nfev=args.max_nfev).x  # fmt: skip
+    after = np.median(resid(z))
+    moved = np.linalg.norm(z[:3] - np.asarray(cam["centre_m"]))
+    new = dict(
+        cam,
+        centre_m=[round(float(v), 3) for v in z[:3]],
+        refit_from=args.runs,
+        refit=dict(
+            frames=len(frames),
+            line_px_median_before=round(float(before), 2),
+            line_px_median_after=round(float(after), 2),
+            centre_moved_m=round(float(moved), 2),
+        ),
+    )
+    for k in ("fitted_from", "mirrored_anchor_files", "owner_point_residual_px"):
+        new.pop(k, None)  # those describe the first game's owner anchors, not this camera
+    args.out.write_text(json.dumps(new, indent=2))
+    print(f"centre {new['centre_m']} (moved {moved:.2f} m); median line distance {before:.2f} -> {after:.2f} px")
+    print(f"wrote {args.out}. Check: pitch_ptz.py run on a window of this game; the share fixed should rise.")
+
+
 def cmd_ring(args) -> None:
     """Radius of the painted ring round the centre spot, scanned on midfield frames of a window. At the first venue
     the white ring was a logo's edge at about 7.5 m, not the 9.15 m law circle, so it is measured, not assumed."""
@@ -584,23 +658,33 @@ def main() -> None:
     f.set_defaults(fn=cmd_fit)
     r = sub.add_parser("run", help="find the pose every STEP_S seconds and write automatic anchors")
     r.add_argument("--run", required=True, type=require_under_data)
-    r.add_argument("--camera", type=Path, default=CAMERA_FILE)
+    r.add_argument("--camera", type=Path, default=None, help="default: the game's pitch_camera.local.json")
     r.add_argument("--min-spacing", type=float, default=STEP_S, help="seconds between written anchors")
     r.set_defaults(fn=cmd_run)
+    rf = sub.add_parser("refit", help="refit the camera position for another game at the same venue (no anchors)")
+    rf.add_argument("--runs", required=True, help="comma list of this game's windows, after `run` with the old camera")
+    rf.add_argument("--camera", type=Path, required=True, help="the camera to start from")
+    rf.add_argument("--out", type=Path, required=True, help="the new game's pitch_camera.local.json")
+    rf.add_argument("--max-frames", type=int, default=REFIT_FRAMES)
+    rf.add_argument("--max-move-m", type=float, default=15.0, help="how far the tripod may have moved")
+    rf.add_argument("--max-nfev", type=int, default=40)
+    rf.set_defaults(fn=cmd_refit)
     g = sub.add_parser("ring", help="measure the centre ring radius on midfield frames of a window")
     g.add_argument("--run", required=True, type=require_under_data)
     g.add_argument("--times", required=True, help="comma list of seconds that show the centre of the pitch")
-    g.add_argument("--camera", type=Path, default=CAMERA_FILE)
+    g.add_argument("--camera", type=Path, default=None, help="default: the game's pitch_camera.local.json")
     g.add_argument("--min-r", type=float, default=5.0)
     g.add_argument("--max-r", type=float, default=11.0)
     g.set_defaults(fn=cmd_ring)
     e = sub.add_parser("evaluate", help="error at the window's owner anchors and the noise floor")
     e.add_argument("--run", required=True, type=require_under_data)
     e.add_argument("--anchors", required=True, type=Path, help="the owner's anchors for this window")
-    e.add_argument("--camera", type=Path, default=CAMERA_FILE)
+    e.add_argument("--camera", type=Path, default=None, help="default: the game's pitch_camera.local.json")
     e.add_argument("--mirrored", action="store_true", help="the owner's anchors measure X from the other goal")
     e.set_defaults(fn=cmd_evaluate)
     args = ap.parse_args()
+    if getattr(args, "camera", "fit") is None:  # the camera of the window's game (sv_common.game_file)
+        args.camera = game_file(args.run, "pitch_camera.local.json")
     args.fn(args)
 
 

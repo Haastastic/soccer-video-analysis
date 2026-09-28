@@ -42,6 +42,18 @@ def require_under_data(path: Path) -> Path:
     return Path(path)
 
 
+def game_dir(run: Path) -> Path:
+    """The folder of a window's game: its parent. A game's windows sit in data/<game>/<window> with the game's
+    files (game.local.json, pitch_camera.local.json, kit_prototypes.local.json) beside them. The first game's
+    windows sit directly in data/, so its files are data/*.local.json, where they always were."""
+    return require_under_data(Path(run)).resolve().parent
+
+
+def game_file(run: Path, name: str) -> Path:
+    """Path of a per-game file for this window (it may not exist yet)."""
+    return game_dir(run) / name
+
+
 CAM_COLS = ["m00", "m01", "m02", "m10", "m11", "m12"]
 COLOR_COLS = ["torso_r", "torso_g", "torso_b", "legs_r", "legs_g", "legs_b"]
 
