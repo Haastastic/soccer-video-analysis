@@ -3,7 +3,9 @@
 `label` shows one frame at a time (every --step-s seconds), with every player-candidate tracklet's box drawn
 and color-coded by team, plus the pipeline's detected ball position if there is one. One key or click per frame:
 
-  click box    that player has the ball
+  click box    that player has the ball (grey boxes are people the pipeline did not count as players, e.g. a
+               goalkeeper standing still in goal: click them too)
+  u            someone has the ball but has no box at all (not tracked): counted as possession, credited to no one
   n            no one has the ball right now (loose: rolling, in the air, contested)
   x            the ball is not visible / you cannot tell who has it
   s            skip, unsure
@@ -52,8 +54,10 @@ def build_items(run: Path, start: float, duration: float, step_s: float) -> list
     ball = pd.read_csv(run / "ball_path.csv").drop_duplicates("ci").set_index("ci").sort_index()
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
     roles = pd.read_csv(run / "tracklet_roles.csv", index_col="track_id")
-    keep = roles.index[roles.player_candidate & roles.role.isin(TEAM_ROLES)]
-    tr = tr[tr.track_id.isin(keep)].sort_values("ci")
+    # every tracked person is drawn and clickable: a goalkeeper standing in goal fails player_candidate's
+    # "static for 8 s" test (owner could not click one, 2026-09-28); non-candidates are drawn thin and grey
+    candidate = roles.player_candidate & roles.role.isin(TEAM_ROLES)
+    tr = tr[tr.track_id.isin(roles.index)].sort_values("ci")
     items = []
     for t in np.arange(start, start + duration, step_s):
         ci = int(round(t * cache.fps))
@@ -71,7 +75,7 @@ def build_items(run: Path, start: float, duration: float, step_s: float) -> list
                         y1=float(row.y1),
                         x2=float(row.x2),
                         y2=float(row.y2),
-                        role=roles.loc[tid, "role"],
+                        role=roles.loc[tid, "role"] if candidate.get(tid, False) else "not a candidate",
                     )
                 )
         bi = ball.index[(ball.index - ci).map(abs) <= TOL_FRAMES]
@@ -111,6 +115,10 @@ class Session:
 
     def loose(self) -> None:
         self._set(np.nan, "loose")
+
+    def unboxed(self) -> None:
+        """Someone has the ball but has no box (not tracked): possessed, credited to no one."""
+        self._set(None, "possessed_unboxed")
 
     def not_visible(self) -> None:
         self._set(np.nan, "not_visible")
@@ -160,7 +168,7 @@ class Viewer:
             color = (0, 255, 0) if item["ball_kind"] == "detected" else (0, 165, 255)
             cv2.circle(show, (bx, by), 12, color, 2 * line)
         status = f" [{label['verdict']}]" if label else ""
-        keys = "click=has ball | wheel zoom | right-click pan | r reset | n loose | x n/a | s skip | b back | q quit"
+        keys = "click=has ball | u has it, no box | n loose | x n/a | s skip | b back | q quit | wheel zoom | r reset"
         where = f"{index + 1}/{total}  t={item['time_s']:.1f}s  ball={item['ball_kind']}{status}{self.zv.label()}"
         text = f"{where}   {keys}"
         return add_footer(self.zv.apply(show), text)
@@ -216,6 +224,9 @@ def cmd_label(args) -> None:
                 viewer.reset_zoom()
             elif key == ord("n"):
                 session.loose()
+                changed = True
+            elif key == ord("u"):
+                session.unboxed()
                 changed = True
             elif key == ord("x"):
                 session.not_visible()
