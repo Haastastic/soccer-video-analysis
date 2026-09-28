@@ -390,7 +390,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   1 official per frame. new_game.py setup now maps a pilot in each half.
 - Speed: new_game.py run processes windows in parallel (--workers, default 3). Two detections at once barely slow
   each other on the laptop GPU (11.6 vs 11.3 min per window), the pitch fit is CPU work (16 threads), and GPU
-  memory was 1.7 of 6 GB. Windows whose roles predate the kit file are redone automatically.
+  memory was 1.7 of 6 GB. But three identity runs at once filled GPU memory (5.7 of 6 GB) and crawled (40+ min vs
+  about 3): the stages share GPU slots, at most 2 detections and 1 identity run at a time. Windows whose roles
+  predate the kit file are redone automatically.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
