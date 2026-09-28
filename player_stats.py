@@ -257,6 +257,11 @@ def main() -> None:
     all_stats, all_events, reports = [], [], []
     for r in args.runs.split(","):
         run = require_under_data(Path(r))
+        cols = ["pf", "ci", "track_id", "X_m", "Y_m", "anchor_gap_s"]
+        xy = pd.read_csv(run / "tracklet_pitch_xy.csv.gz", usecols=cols)
+        if identity_rows(run, xy).empty:  # e.g. a window past the end of the game
+            print(f"{run.name}: no identified players, skipped")
+            continue
         stats, ev, report = clip_stats(run)
         stats.to_csv(run / "player_stats.csv", index=False)
         ev.to_csv(run / "player_events.csv", index=False)

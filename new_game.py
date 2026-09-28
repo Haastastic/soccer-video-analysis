@@ -299,6 +299,39 @@ def name_start(g: dict, name: str) -> str:
     return dict(windows(g))[name]
 
 
+MIN_OURS = 3  # a minute with fewer of our players visible per frame (median) is not our match
+
+
+def ours_per_minute(game: str, names: list) -> pd.Series:
+    """Median number of our players (target-role player candidates) per frame, per minute of the video."""
+    out = {}
+    for name, start in names:
+        run_dir = game_folder(game) / name
+        tr = pd.read_csv(run_dir / "best_tracklets.csv.gz", usecols=["ci", "track_id"])
+        roles = pd.read_csv(run_dir / "tracklet_roles.csv").set_index("track_id")
+        ours = roles.index[(roles.role == "target") & roles.player_candidate.astype(bool)]
+        fps = json.loads((run_dir / "cache" / "meta.json").read_text())["cache_fps"]
+        frames = tr.assign(ours=tr.track_id.isin(ours)).groupby("ci").ours.sum()
+        minute = ((parse_time(start) + frames.index / fps) // 60).astype(int)
+        for m, v in frames.groupby(minute).median().items():
+            out[m] = v
+    return pd.Series(out).sort_index()
+
+
+def check_play(game: str, g: dict, names: list) -> None:
+    """Warn about minutes inside the confirmed halves where our team is not on the pitch. Game 2 (2026-09-28): the
+    contact sheet's thumbnails made halftime warm-ups and the next game's players look like play, and the halves
+    were confirmed 6 min too long at each end; counting our players per minute showed the real ends at once."""
+    per = ours_per_minute(game, names)
+    thin = per[per < MIN_OURS]
+    if not len(thin):
+        print("play check: our team is on the pitch in every minute of the confirmed halves")
+        return
+    print(f"play check: WARNING, fewer than {MIN_OURS} of our players per frame in minute(s) "
+          + ", ".join(f"{m // 60}:{m % 60:02d}" for m in thin.index))  # fmt: skip
+    print("  if that is the start or end of a half, correct it with `confirm --first-half/--second-half` and rerun")
+
+
 def cmd_run(args) -> None:
     g = load_game(args.game)
     if not (game_folder(args.game) / "kit_prototypes.local.json").exists():
@@ -332,6 +365,7 @@ def cmd_run(args) -> None:
             for name, _ in names:
                 run(["jersey_auto.py", "identify", "--run", game_folder(args.game) / name, "--from", LABELED,
                      "--write", "--force"])  # fmt: skip
+    check_play(args.game, g, names)
     runs = ",".join(str(game_folder(args.game) / n) for n, _ in names)
     run(["player_stats.py", "--runs", runs])
     if g.get("first_half_our_goal_x") is None:
