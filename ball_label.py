@@ -181,8 +181,7 @@ def cmd_label(args) -> None:
                 viewer.zv.reset()
             elif key == ord("q"):
                 break
-            if changed:
-                viewer.zv.reset()  # a new frame starts at the whole picture
+            if changed:  # zoom and view carry over to the next frame (owner rule); r resets
                 session.table().to_csv(truth_path, index=False)
     finally:
         cv2.destroyAllWindows()

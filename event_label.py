@@ -15,7 +15,7 @@ and color-coded by team, plus the pipeline's detected ball position if there is 
   right click  center the zoomed view on that spot
   r            reset zoom to the full frame
 
-Zoom resets to the full frame automatically whenever you move to a new frame. Progress is saved after every
+Zoom and view carry over from frame to frame (press r to go back to the whole frame). Progress is saved after every
 frame, so rerunning `label` resumes where you stopped. Labels go to OUT/events_truth.csv (git-ignored under
 data/). The frames show people: keep them local.
 
@@ -228,8 +228,7 @@ def cmd_label(args) -> None:
                 changed = True
             elif key == ord("q"):
                 break
-            if changed:
-                viewer.reset_zoom()
+            if changed:  # zoom and view carry over to the next frame (owner rule); r resets
                 session.table().to_csv(truth_path, index=False)
     finally:
         cv2.destroyAllWindows()
