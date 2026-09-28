@@ -35,6 +35,7 @@ import json
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -295,9 +296,23 @@ def cmd_run(args) -> None:
     if not (game_folder(args.game) / "kit_prototypes.local.json").exists():
         raise SystemExit("Run `setup` first (camera and kits).")
     video, names = Path(g["video"]), windows(g)
-    for name, start in names:
-        print(f"\n{name} ({start})", flush=True)
+    kits = game_folder(args.game) / "kit_prototypes.local.json"
+    for name, _ in names:  # roles classified before the kit colours last changed are redone, with what follows
+        roles = game_folder(args.game) / name / "tracklet_roles.csv"
+        if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
+            for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
+                (roles.parent / stale).unlink(missing_ok=True)
+
+    def one(item):
+        name, start = item
+        print(f"{name} ({start}) started", flush=True)
         run_stages(video, args.game, name, start)
+        print(f"{name} done", flush=True)
+
+    # windows in parallel: two detections at once barely slow each other on the laptop GPU (11.6 vs 11.3 min), and
+    # the pitch fit is CPU work; each worker runs one window's stages in order
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        list(pool.map(one, names))
     if g.get("first_half_our_goal_x") is None:
         x = goal_vote(args.game, [n for n, _ in names], g)
         if x is None:
@@ -334,6 +349,7 @@ def main() -> None:
     s.set_defaults(fn=cmd_setup)
     r = sub.add_parser("run", help="every window, which goal we defend, stats and coaching pages")
     r.add_argument("--game", required=True)
+    r.add_argument("--workers", type=int, default=3, help="windows processed at once (GPU memory: about 2 GB each)")
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
     args.fn(args)
