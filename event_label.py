@@ -253,6 +253,11 @@ def truth_events(truth: pd.DataFrame, roles: pd.DataFrame) -> pd.DataFrame:
     Segments are built only from consecutive rows in the (sorted) truth table whose ci is exactly one label-step
     apart, so an unlabeled, skipped or not-visible frame breaks a segment instead of being bridged over.
     """
+
+    def team_of(tid) -> str:
+        """The team of a labeled possessor, "" when the pipeline gave the track no team role."""
+        return TEAM_ROLES.get(roles.loc[int(tid), "role"], "") if int(tid) in roles.index else ""
+
     t = truth.sort_values("ci").reset_index(drop=True)
     step = int(t.ci.diff().dropna().median()) if len(t) > 1 else 1
     known = t.verdict.isin(["possessed", "loose"])
@@ -281,7 +286,7 @@ def truth_events(truth: pd.DataFrame, roles: pd.DataFrame) -> pd.DataFrame:
                     time_s=float(seg.time_s[a]),
                     end_s=float(seg.time_s[b]),
                     track_id=int(tid),
-                    team=TEAM_ROLES[roles.loc[int(tid), "role"]],
+                    team=team_of(tid),
                     to_track_id=np.nan,
                     to_team="",
                 )
@@ -297,14 +302,16 @@ def truth_events(truth: pd.DataFrame, roles: pd.DataFrame) -> pd.DataFrame:
                         time_s=float(seg.time_s[a2]),
                         end_s=np.nan,
                         track_id=int(id2),
-                        team=TEAM_ROLES[roles.loc[int(id2), "role"]],
+                        team=team_of(id2),
                         to_track_id=np.nan,
                         to_team="",
                     )
                 )
             if pd.isna(id1) or pd.isna(id2) or id1 == id2:
                 continue
-            t1, t2 = TEAM_ROLES[roles.loc[int(id1), "role"]], TEAM_ROLES[roles.loc[int(id2), "role"]]
+            t1, t2 = team_of(id1), team_of(id2)
+            if not t1 or not t2:
+                continue  # a possessor the pipeline did not give a team (e.g. a goalkeeper read as "other")
             events.append(
                 dict(
                     type="pass" if t1 == t2 else "turnover",
