@@ -5,7 +5,8 @@ and color-coded by team, plus the pipeline's detected ball position if there is 
 
   click box    that player has the ball (grey boxes are people the pipeline did not count as players, e.g. a
                goalkeeper standing still in goal: click them too)
-  u            someone has the ball but has no box at all (not tracked): counted as possession, credited to no one
+  u            someone has the ball but has no box at all (not tracked): recorded, but like an unclear frame it
+               ends a possession run in `score`, since there is no player to credit
   n            no one has the ball right now (loose: rolling, in the air, contested)
   x            the ball is not visible / you cannot tell who has it
   s            skip, unsure
@@ -117,7 +118,8 @@ class Session:
         self._set(np.nan, "loose")
 
     def unboxed(self) -> None:
-        """Someone has the ball but has no box (not tracked): possessed, credited to no one."""
+        """Someone has the ball but has no box (not tracked). Recorded; `score` treats it like an unclear frame (it
+        ends a possession run), since no player can be credited and matching needs a player."""
         self._set(None, "possessed_unboxed")
 
     def not_visible(self) -> None:

@@ -46,7 +46,8 @@ def game_dir(run: Path) -> Path:
     """The folder of a window's game: its parent. A game's windows sit in data/<game>/<window> with the game's
     files (game.local.json, pitch_camera.local.json, kit_prototypes.local.json) beside them. The first game's
     windows sit directly in data/, so its files are data/*.local.json, where they always were."""
-    return require_under_data(Path(run)).resolve().parent
+    # the game folder must itself be data/ or inside it: a bare data/ as the run would give the repo root
+    return require_under_data(require_under_data(Path(run)).resolve().parent)
 
 
 def game_file(run: Path, name: str) -> Path:

@@ -52,7 +52,6 @@ MIN_BREAK_S = 60  # a stretch without play this long is a break
 MIN_TAIL_S = 120  # a half's last partial window is kept if it covers this much play
 PILOT_FIXED_PCT, PILOT_MAX_GAP_S = 70.0, 20.0  # a pilot below these is refitted (see pitch_ok)
 PREVIOUS_CAMERA = DATA_DIR / "pitch_camera.local.json"  # the first game's
-PREVIOUS_KITS = HERE / "kit_prototypes.local.json"  # the first game's
 LABELED = "data/clipA,data/clipB,data/clipE"  # owner-labeled windows: the jersey reader and appearance learn here
 
 
