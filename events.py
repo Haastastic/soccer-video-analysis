@@ -8,8 +8,10 @@ Shots are not detected: they need the goal position, which needs pitch calibrati
 How it works, on the ball's frame grid (10 fps):
   - Contact: a player is in contact when the ball is within CONTACT_H body heights of their feet.
   - Possession: the nearest player in contact, as a segment of at least MIN_POSSESSION_S. Short gaps are bridged.
-  - Touch: a sharp change in ball velocity (in body heights per second) with a player within TOUCH_H.
-  - Pass: possession moves between two different tracklets of one team within MAX_PASS_GAP_S. Tracklets are
+  - Touch: a player gaining the ball (the start of each possession), which is what the owner's labels count;
+    TOUCH_MODE "velocity" (a sharp change in ball velocity near a player) found 11% of labeled touches.
+  - Pass: possession moves between two different tracklets of one team within MAX_PASS_GAP_S (possessions of
+    at least CHAIN_MIN_S only). UNRELIABLE: 1 of 11 labeled passes found. Tracklets are
     fragments (about 13 IDs per player), so a handoff where the two players are less than MIN_PASS_H apart is
     treated as the same player and merged, not counted as a pass.
   - Turnover: possession moves between teams within MAX_PASS_GAP_S.
@@ -29,17 +31,78 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, cache_stride, read_frames, require_under_data
+from sv_common import Cache, cache_stride, game_file, parse_time, read_frames, require_under_data
 
 TEAM_ROLES = {"target": "target", "opponent": "opponent", "goalkeeper": "goalkeeper"}
 CONTACT_H = 0.6  # ball this close to the feet (in body heights) counts as contact
 TOUCH_H = 1.0  # a velocity change counts as a touch only with a player this close
 TOUCH_DV_H = 2.0  # velocity change (body heights per second) needed for a touch
-MIN_POSSESSION_S = 0.4
+MIN_POSSESSION_S = 0.2  # was 0.4; chosen leave-one-window-out on 5 owner-labeled windows (CLAUDE.md Phase 12)
 BRIDGE_S = 0.4  # gaps up to this long inside one player's possession are bridged
 MAX_PASS_GAP_S = 3.0
+CHAIN_MIN_S = 0.4  # passes and turnovers chain only possessions at least this long (short ones flicker between players)
 MIN_PASS_H = 1.5  # players closer than this at the handoff are treated as one player
 ALLOW_INTERPOLATED = False  # interpolated ball positions were 63% correct and often a ghost, see CLAUDE.md
+# who can hold the ball: "candidates" (player candidates with a team role), "team" (any track with a team role, e.g.
+# a goalkeeper standing still in goal, which fails the candidate test), "keepers" (candidates plus the two keepers,
+# given the team of the goal they stand in; see keeper_roles) or "all" (every track)
+INCLUDE = "keepers"
+# what a touch is: "velocity" (a sharp change in ball velocity near a player), "gain" (a player gaining possession,
+# which is what the owner's labels count) or "both"
+TOUCH_MODE = "gain"
+
+
+KEEPER_BOX_M, KEEPER_HALF_WIDTH_M = 18.0, 25.0  # a keeper's median position: this deep and this wide of centre
+
+
+def our_goal_x(run: Path, length: float) -> float | None:
+    """X of the goal our team defends in this window: from the game file (which goal in the first half, swapped
+    after halftime), else from where the roster's goalkeeper was identified in this window, else None."""
+    path = game_file(run, "game.local.json")
+    if path.exists():
+        g = json.loads(path.read_text())
+        if g.get("first_half_our_goal_x") is not None:
+            meta = json.loads((run / "cache" / "meta.json").read_text())
+            mid_min = (parse_time(meta["clip_start"]) + float(meta["clip_duration"]) / 2) / 60
+            first = float(g["first_half_our_goal_x"])
+            return (length - first if first < length / 2 else 0.0) if mid_min > g["halftime_min"] else first
+    segs, roster = run / "identity_segments.csv", Path(__file__).resolve().parent / "roster.csv"
+    if segs.exists() and roster.exists():
+        r = pd.read_csv(roster)
+        gk = r[r.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
+        s = pd.read_csv(segs)
+        s = s[s.jersey.isin(gk)]
+        xy = pd.read_csv(run / "tracklet_pitch_xy.csv.gz", usecols=["ci", "track_id", "X_m"])
+        x = pd.concat([xy[(xy.track_id == g.track_id) & xy.ci.between(g.ci_start, g.ci_end)] for g in s.itertuples()]
+                      or [xy.iloc[:0]]).X_m.median()  # fmt: skip
+        if np.isfinite(x):
+            return 0.0 if x < length / 2 else length
+    return None
+
+
+def keeper_roles(run: Path, roles: pd.DataFrame) -> pd.DataFrame:
+    """The two keepers as players of their teams. Team colours cannot place a keeper (their kits differ from the
+    team's, and both keepers share the goalkeeper colours); a keeper standing in goal also fails the candidate test
+    (static for 8 s). So a track the colours called goalkeeper, other or unknown whose median pitch position is in a
+    penalty area becomes a player of the team defending that goal (owner's suggestion, 2026-09-28). Without a known
+    goal end it stays "goalkeeper": a player, but not used for passes or turnovers."""
+    cam, xy_path = game_file(run, "pitch_camera.local.json"), run / "tracklet_pitch_xy.csv.gz"
+    if not cam.exists() or not xy_path.exists():
+        return roles
+    length = json.loads(cam.read_text())["length_m"]
+    ours = our_goal_x(run, length)
+    med = pd.read_csv(xy_path, usecols=["track_id", "X_m", "Y_m"]).groupby("track_id").median()
+    roles = roles.copy()
+    for tid in roles.index[roles.role.isin(["goalkeeper", "other", "unknown"])]:
+        if tid not in med.index:
+            continue
+        x, y = med.loc[tid, "X_m"], med.loc[tid, "Y_m"]
+        for goal in (0.0, length):
+            depth = x - goal if goal == 0.0 else goal - x  # into the pitch from that goal line
+            if -1.0 <= depth <= KEEPER_BOX_M and abs(y) <= KEEPER_HALF_WIDTH_M:  # not behind the goal (spectators)
+                team = "goalkeeper" if ours is None else ("target" if goal == ours else "opponent")
+                roles.loc[tid, ["role", "player_candidate"]] = [team, True]
+    return roles
 
 
 def load_inputs(run: Path):
@@ -47,7 +110,14 @@ def load_inputs(run: Path):
     ball = pd.read_csv(run / "ball_path.csv").sort_values("ci").reset_index(drop=True)
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
     roles = pd.read_csv(run / "tracklet_roles.csv", index_col="track_id")
-    keep = roles.index[roles.player_candidate & roles.role.isin(TEAM_ROLES)]
+    if INCLUDE == "keepers":
+        roles = keeper_roles(run, roles)
+    if INCLUDE == "all":
+        keep = roles.index
+    elif INCLUDE == "team":
+        keep = roles.index[roles.role.isin(TEAM_ROLES)]
+    else:
+        keep = roles.index[roles.player_candidate & roles.role.isin(TEAM_ROLES)]
     tr = tr[tr.track_id.isin(keep)]
     return cache, ball, tr, roles
 
@@ -98,7 +168,7 @@ def detect(run: Path, min_confidence: float, allow_interpolated: bool = ALLOW_IN
     detected = (ball.kind == "detected").to_numpy()
     seg = ball.seg.to_numpy()
     ids, fx, fy, h = player_positions(tr, ci)
-    role_of = roles.role.reindex(ids).to_numpy()
+    role_of = roles.role.reindex(ids).where(lambda r: r.isin(TEAM_ROLES), "goalkeeper").to_numpy()
     role_conf = roles.confidence.reindex(ids).to_numpy()
     n = len(ci)
 
@@ -179,6 +249,8 @@ def detect(run: Path, min_confidence: float, allow_interpolated: bool = ALLOW_IN
     ok_seg = ok_seg & even
     dv_h = np.hypot(dvx, dvy) * scale / h_ref / 2  # body heights per second, over the 2-frame window
     cand = np.flatnonzero(ok_seg & trusted & np.isfinite(dv_h) & (dv_h >= TOUCH_DV_H) & (dmin <= TOUCH_H))
+    if TOUCH_MODE == "gain":
+        cand = cand[:0]
     last = -(10**9)
     for i in cand:
         window = np.arange(max(0, i - 2), min(n, i + 3))
@@ -211,7 +283,28 @@ def detect(run: Path, min_confidence: float, allow_interpolated: bool = ALLOW_IN
             merged[-1] = (merged[-1][0], b, p)
         else:
             merged.append((a, b, p))
-    for (a1, b1, p1), (a2, b2, p2) in zip(merged[:-1], merged[1:], strict=True):
+    if TOUCH_MODE in ("gain", "both"):  # a touch is a player gaining the ball: the start of each possession
+        velocity_touch = {e["ci"] for e in events if e["type"] == "touch"}
+        for a, b, p in merged:
+            if any(abs(ci[a] - v) < 0.3 * cache.fps for v in velocity_touch):
+                continue  # "both": already counted from the velocity change
+            events.append(
+                dict(
+                    type="touch",
+                    time_s=round(ci[a] / cache.fps, 2),
+                    end_s=np.nan,
+                    ci=int(ci[a]),
+                    track_id=int(ids[p]),
+                    team=TEAM_ROLES[role_of[p]],
+                    to_track_id=np.nan,
+                    to_team="",
+                    confidence=conf_for(a, b, p),
+                    ball_detected_share=round(float(detected[a : b + 1].mean()), 2),
+                    distance_h=round(float(np.nanmedian(dmin[a : b + 1])), 2),
+                )
+            )
+    chain = [m for m in merged if (ci[m[1]] - ci[m[0]]) / cache.fps + 1 / fps >= CHAIN_MIN_S]
+    for (a1, b1, p1), (a2, b2, p2) in zip(chain[:-1], chain[1:], strict=True):
         gap_s = (ci[a2] - ci[b1]) / cache.fps
         if p1 == p2 or gap_s > MAX_PASS_GAP_S:
             continue

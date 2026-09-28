@@ -358,6 +358,42 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Identity on the pilot: 27% of target samples (game 1 windows 34 to 55%), learned from game 1's labeled windows.
   Not yet explained.
 
+## Phase 12: ball events retuned on owner labels (events.py, 2026-09-28)
+- Ceiling test first (clipA's old window with the owner's ball positions fed in as the path): possession recall
+  56 -> 75% but 10 predicted turnovers for 1 real one, touch unchanged. So the losses are in the event logic, not
+  only the ball detector. Touches cannot be tested that way (0.5 s ball labels are too coarse for a touch).
+- Owner labeled 4 more 60 s possession windows with event_label.py, about 6 to 9 min each: game 1 first half
+  (clipH 40-100 s), game 1 second half (clipP 100-160 s), game 2 first half (g0922/w0500 20-80 s), game 2 second
+  half (g0922/w5340 160-220 s). With the old window: 111 possessions, 107 touches, 11 passes, 11 turnovers.
+- Labeler fixes found while labeling (owner): the window grows with zoom and keeps the zoom between frames (now a
+  rule for every labeling window, ZoomView gained a base scale); every tracked person is boxed (a goalkeeper
+  standing in goal failed the player-candidate test and could not be clicked); `u` = has the ball, no box.
+- Where possessions were lost (labeled possessed frames): no ball detection within 0.1 s in 22% (game 1) and 34%
+  (game 2); when detected, the ball was within the 0.6 body-height contact distance 85% (game 1) but 55% (game 2:
+  a quarter of detections 3 to 5 body heights away, a wrong object).
+- Grid over contact distance, gap bridging, minimum possession, who can hold the ball, touch definition and
+  confidence cut, chosen leave-one-window-out (5 folds; the same setting won 4 of 5). Held-out, pooled:
+  possession recall/precision 42/76% -> 62/63%, touch 11/35% -> 62/60%, turnover 36/25% -> 64/24% (after the
+  chain rule below), pass 1 of 11 found either way. New defaults: MIN_POSSESSION_S 0.2 (was 0.4), TOUCH_MODE
+  "gain" (a touch is a player gaining the ball, as the owner labels it; the velocity rule found 11%), INCLUDE
+  "keepers", CHAIN_MIN_S 0.4 (passes/turnovers chain only possessions of 0.4 s or more: turnover F1 0.28 -> 0.35,
+  chosen in every fold). Contact 0.6 and bridging 0.4 s unchanged. No confidence cut helped.
+- Keepers (owner's suggestion): a track the colours called goalkeeper/other/unknown whose median pitch position is
+  inside a penalty area (not behind the goal) becomes a player of the team defending that goal (game file, or where
+  our goalkeeper was identified). Goalkeepers held the ball in about 4% of labeled possession frames, so the gain
+  is small (0.623 vs 0.616 mean F1) but their possessions and distribution now count for the right team.
+- Per window, new defaults: game 1 73 to 76% possession recall at 57 to 73% precision; game 2 38 to 47% at 53 to
+  75%. Game 2 is limited by the ball detector (misses and wrong objects), the next lever there. Passes stay
+  UNRELIABLE (the ball in flight between teammates is lost).
+- Kits drift between halves (game 2 second half: 83 player tracks read as goalkeeper, 65 unknown with the
+  first-half prototypes). Mapping a second-half pilot too (assign adds prototypes): 8 target, 10 opponent, 1 keeper,
+  1 official per frame. new_game.py setup now maps a pilot in each half.
+- Speed: new_game.py run processes windows in parallel (--workers, default 3). Two detections at once barely slow
+  each other on the laptop GPU (11.6 vs 11.3 min per window), the pitch fit is CPU work (16 threads), and GPU
+  memory was 1.7 of 6 GB. But three identity runs at once filled GPU memory (5.7 of 6 GB) and crawled (40+ min vs
+  about 3): the stages share GPU slots, at most 2 detections and 1 identity run at a time. Windows whose roles
+  predate the kit file are redone automatically.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
