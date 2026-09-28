@@ -34,17 +34,17 @@ import pandas as pd
 
 import jersey_suggest as js
 from player_stats import ROSTER_FILE, identity_rows
-from sv_common import require_under_data, tracklet_fingerprint
+from sv_common import game_file, require_under_data, tracklet_fingerprint
 
 SAMPLE_CI = 16  # about 0.5 s at 30 fps; replayed tracklets have rows on even cached frames
 ROLES = ("target", "goalkeeper")
 # identify: settings chosen leave-one-window-out on clipA, B, E (exp8.py, exp9.py)
 PROD_READ_CI = 2  # every tracklet row: twice the reads of READ_CI, +2 to 12 points of identified time
 READER_FT = Path(__file__).resolve().parent / "models" / "jersey" / "parseq_ft_game.pt"
-PITCH_CAMERA = Path(__file__).resolve().parent / "data" / "pitch_camera.local.json"  # pitch_ptz.py fit
+PITCH_CAMERA = "pitch_camera.local.json"  # per game, beside its windows (sv_common.game_file); pitch_ptz.py fit
 # Game facts (git-ignored): {"halftime_min": M, "first_half_our_goal_x": 0 or the pitch length}. Teams swap ends at
 # halftime. When present, the goalkeeper rule uses the known end instead of guessing it from appearance.
-GAME_FILE = Path(__file__).resolve().parent / "data" / "game.local.json"
+GAME_FILE = "game.local.json"  # per game, beside its windows (sv_common.game_file)
 MIN_LEGIBILITY, MIN_READ_CONF, P_READ = 0.5, 0.8, 0.9  # a read counts if both scores pass; P_READ: chance it is right
 W_APP, W_SELF_APP, W_POS = 0.3, 0.6, 0.5  # evidence weights against reads (log-probability scale)
 SWITCH_COST = 20.0  # switching only at box overlaps was tried and was no better (exp8.py)
@@ -321,9 +321,12 @@ GK_MIN_P_KNOWN_END = 0.1
 
 def known_goal_end(run: Path, length: float) -> float | None:
     """X of the goal our goalkeeper defends in this window, from GAME_FILE (None without one)."""
-    if not GAME_FILE.exists():
+    path = game_file(run, GAME_FILE)
+    if not path.exists():
         return None
-    game = json.loads(GAME_FILE.read_text())
+    game = json.loads(path.read_text())
+    if game.get("first_half_our_goal_x") is None:  # a new game before new_game.py's goalkeeper vote
+        return None
     first = float(game["first_half_our_goal_x"])
     second_half = js.clip_mid_min(run) > float(game["halftime_min"])
     return (length - first if first < length / 2 else 0.0) if second_half else first
@@ -354,7 +357,7 @@ def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: li
         return gk, none  # the labeled windows barely show the goalkeeper
     clf = LogisticRegression(max_iter=4000, C=js.C, class_weight="balanced")
     p = clf.fit(np.concatenate(X), Y_all, sample_weight=np.concatenate(W)).predict_proba(F)[:, 1]
-    length = json.loads(PITCH_CAMERA.read_text())["length_m"]
+    length = json.loads(game_file(run, PITCH_CAMERA).read_text())["length_m"]
     role = rows.track_id.map(pd.read_csv(run / "tracklet_roles.csv").set_index("track_id").role).to_numpy()
     x, y = rows.X_m.to_numpy(), rows.Y_m.to_numpy()
     at = {0.0: (role == "goalkeeper") & (x < length / 2), length: (role == "goalkeeper") & (x >= length / 2)}

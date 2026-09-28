@@ -1,11 +1,14 @@
 """Hand-check the ball path: label the true ball position on a window of a clip, then score the path.
 
-`label` shows one frame at a time (every --step-s seconds) with the pipeline's predicted ball circled and a
-zoomed inset, because the ball is only about 10 px wide. One key or click per frame:
+`label` shows one frame at a time (every --step-s seconds) with the pipeline's predicted ball circled. The ball
+is only about 10 px wide: zoom in to click it precisely. One key or click per frame:
 
   y            the circle is on the ball (accept the prediction)
-  left click   the ball is here (click on the main image, or on the zoomed inset for precision)
-  right click  move the zoomed inset to that spot, to look around
+  left click   the ball is here
+  mouse wheel  zoom, keeping the point under the cursor; the window grows with the zoom until it fills the
+               screen, then scroll bars appear (drag or click)
+  right click  center the zoomed view on that spot
+  r            reset zoom to the whole frame
   x            the ball is not visible in this frame
   s            skip, unsure
   b            back one frame (undo the last label)
@@ -29,10 +32,9 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, cache_stride, read_frames, require_under_data
+from sv_common import FOOTER_H, Cache, ZoomView, add_footer, cache_stride, read_frames, require_under_data
 
 WINDOW = "ball label"
-INSET_SRC, INSET_ZOOM = 128, 3  # source pixels shown in the inset, and its magnification
 TRUTH_COLS = ["time_s", "ci", "pred_x", "pred_y", "pred_kind", "truth_x", "truth_y", "visible", "verdict"]
 
 
@@ -104,66 +106,29 @@ class Session:
 
 
 class Viewer:
-    """Draws a frame with the prediction and an inset, and maps mouse clicks back to full-resolution pixels."""
+    """Draws a full-resolution frame with the prediction, shown through sv_common.ZoomView: the window grows with
+    zoom until the screen constrains it (owner rule), then scroll bars. Clicks map back to frame pixels."""
 
     def __init__(self, scale: float):
-        self.scale = scale
-        self.inset_center = None  # full-res (x, y) the inset looks at, None means follow the prediction
-        self.inset_rect = (0, 0, 0, 0)  # x, y, w, h on the displayed image
-        self.inset_origin = (0, 0)  # full-res top-left of the inset source
-        self.shown_size = (0, 0)
+        self.zv = ZoomView(reserve_h=FOOTER_H, base=scale)
 
     def render(self, img: np.ndarray, item: dict, index: int, total: int, label: dict | None) -> np.ndarray:
-        h, w = img.shape[:2]
+        show = img.copy()
+        line = max(1, round(1.5 / self.zv.mag))  # about 1.5 window pixels at any zoom
         pred = (item["pred_x"], item["pred_y"]) if np.isfinite(item["pred_x"]) else None
-        center = self.inset_center or pred or (w / 2, h / 2)
-        x0 = int(np.clip(center[0] - INSET_SRC / 2, 0, w - INSET_SRC))
-        y0 = int(np.clip(center[1] - INSET_SRC / 2, 0, h - INSET_SRC))
-        self.inset_origin = (x0, y0)
-        inset = cv2.resize(
-            img[y0 : y0 + INSET_SRC, x0 : x0 + INSET_SRC],
-            None,
-            fx=INSET_ZOOM,
-            fy=INSET_ZOOM,
-            interpolation=cv2.INTER_CUBIC,
-        )
-
-        def mark(canvas, pt, color, k, radius):
-            cv2.circle(canvas, (int(pt[0] * k), int(pt[1] * k)), radius, color, 1, cv2.LINE_AA)
-
         color = (0, 255, 255) if item["pred_kind"] == "interpolated" else (0, 0, 255)
-        show = cv2.resize(img, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
         if pred:
-            mark(show, pred, color, self.scale, 14)
-            mark(inset, (pred[0] - x0, pred[1] - y0), color, INSET_ZOOM, 22)
+            cv2.circle(show, (int(pred[0]), int(pred[1])), 20, color, line, cv2.LINE_AA)
         if label and np.isfinite(label["truth_x"]):
-            truth = (label["truth_x"], label["truth_y"])
-            mark(show, truth, (0, 255, 0), self.scale, 8)
-            mark(inset, (truth[0] - x0, truth[1] - y0), (0, 255, 0), INSET_ZOOM, 12)
-        ih, iw = inset.shape[:2]
-        sh, sw = show.shape[:2]
-        show[0:ih, sw - iw : sw] = inset
-        cv2.rectangle(show, (sw - iw, 0), (sw - 1, ih - 1), (255, 255, 255), 1)
-        self.inset_rect = (sw - iw, 0, iw, ih)
-        self.shown_size = (sw, sh)
+            cv2.circle(show, (int(label["truth_x"]), int(label["truth_y"])), 11, (0, 255, 0), line, cv2.LINE_AA)
         pred_text = f"pred {item['pred_kind']}" if pred else "no prediction"
         status = f" [{label['verdict']}]" if label else ""
-        keys = "y accept | click ball | x not visible | s skip | b back | q quit"
-        text = f"{index + 1}/{total}  t={item['time_s']:.1f}s  {pred_text}{status}   {keys}"
-        cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
-        cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        return show
+        keys = "y accept | click ball | wheel zoom | right-click pan | r reset | x not visible | s skip | b back | q"
+        where = f"{index + 1}/{total}  t={item['time_s']:.1f}s  {pred_text}{status}{self.zv.label()}"
+        return add_footer(self.zv.apply(show), f"{where}   {keys}")
 
     def to_full(self, mx: int, my: int) -> tuple:
-        """Map a click on the displayed image to full-resolution pixels, using the inset when the click is in it."""
-        ix, iy, iw, ih = self.inset_rect
-        if ix <= mx < ix + iw and iy <= my < iy + ih:
-            return self.inset_origin[0] + (mx - ix) / INSET_ZOOM, self.inset_origin[1] + (my - iy) / INSET_ZOOM
-        return mx / self.scale, my / self.scale
-
-    def in_inset(self, mx: int, my: int) -> bool:
-        ix, iy, iw, ih = self.inset_rect
-        return ix <= mx < ix + iw and iy <= my < iy + ih
+        return self.zv.to_content(mx, my)
 
 
 def cmd_label(args) -> None:
@@ -180,11 +145,11 @@ def cmd_label(args) -> None:
     viewer = Viewer(args.scale)
     pending = {}
 
-    def on_mouse(event, mx, my, _flags, _param):
+    def on_mouse(event, mx, my, flags, _param):
+        if viewer.zv.on_mouse(event, mx, my, flags):  # wheel zoom, right-click pan, scroll bars
+            return
         if event == cv2.EVENT_LBUTTONDOWN:
             pending["click"] = (mx, my)
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            pending["pan"] = (mx, my)
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(WINDOW, on_mouse)
@@ -200,24 +165,23 @@ def cmd_label(args) -> None:
             changed = False
             if "click" in pending:
                 session.click(*viewer.to_full(*pending.pop("click")))
-                viewer.inset_center, changed = None, True
-            elif "pan" in pending:
-                viewer.inset_center = viewer.to_full(*pending.pop("pan"))
+                changed = True
             elif key == ord("y"):
                 changed = session.accept()
-                viewer.inset_center = None
             elif key == ord("x"):
                 session.not_visible()
-                viewer.inset_center, changed = None, True
+                changed = True
             elif key == ord("s"):
                 session.skip()
-                viewer.inset_center, changed = None, True
+                changed = True
             elif key == ord("b"):
                 session.back()
-                viewer.inset_center, changed = None, True
+                changed = True
+            elif key == ord("r"):
+                viewer.zv.reset()
             elif key == ord("q"):
                 break
-            if changed:
+            if changed:  # zoom and view carry over to the next frame (owner rule); r resets
                 session.table().to_csv(truth_path, index=False)
     finally:
         cv2.destroyAllWindows()

@@ -10,7 +10,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Every stage writes its output to disk so any stage can be rerun and scored on its own.
 - Every stat carries a confidence value and a visibility percentage. Low-confidence events go to a review queue.
 - Be direct. Outline format with real detail. No filler.
-- Every clip review/labeling tool needs zoom (owner rules, 2026-09-23/24). Crop tools (track_purity_label.py, jersey_label.py, role_label.py) share one layout and zoom from sv_common: all of an item's crops at once in time order, left to right then top to bottom, in a grid sized to the screen (crop_tile, tile_grid, grid_cols) - no paging. ZoomView: mouse wheel zooms keeping the point under the cursor, right click centers, r resets; the window grows with zoom up to the screen size, then scroll bars appear (drag or click); status text goes below the image (add_footer). event_label.py and ball_label.py are single-frame viewers with their own zoom; pitch_anchor_ui.py is a browser UI.
+- Every clip review/labeling tool needs zoom (owner rules, 2026-09-23/24). Crop tools (track_purity_label.py, jersey_label.py, role_label.py) share one layout and zoom from sv_common: all of an item's crops at once in time order, left to right then top to bottom, in a grid sized to the screen (crop_tile, tile_grid, grid_cols) - no paging. ZoomView: mouse wheel zooms keeping the point under the cursor, right click centers, r resets; the window grows with zoom up to the screen size, then scroll bars appear (drag or click); status text goes below the image (add_footer). event_label.py and ball_label.py are single-frame viewers on the same ZoomView (full-resolution frame, base scale fits the screen at 1x). EVERY labeling window grows with zoom until the screen constrains it, then scroll bars, and the zoom and view carry over when it moves to the next item (owner rules, 2026-09-28): any new labeling tool must use sv_common.ZoomView. pitch_anchor_ui.py is a browser UI.
 
 ## Footage facts
 - 1080p, roughly 30 fps, elevated sideline auto-pan camera. Not a fixed wide shot. CORRECTED 2026-09-23 (owner): it does NOT follow the ball - earlier phases assumed it did and reasoned from that; those specific causal claims are wrong and are being corrected as they're found (see Phase 5 findings for one). What the pan actually follows or is driven by is not established; do not assume ball-following, and do not invent a replacement cause without asking.
@@ -333,6 +333,31 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   the team line. Self-contained (inline SVG, a few lines of inline script for tooltips, no network requests), light
   and dark themes. Local only: they carry names of minors. Checked by rendering in headless Edge, both themes.
 
+## Phase 11: a second game, and one command for any new game (new_game.py, 2026-09-28)
+- Games now have folders: data/<game>/<window> with the game's own game.local.json (halves, halftime, which goal we
+  defend), pitch_camera.local.json and kit_prototypes.local.json beside them (sv_common.game_file). The first
+  game's windows stay in data/ and its files where they were, so nothing about it changed.
+- new_game.py: `plan` (density scan, proposed halves, contact sheet data/<game>/live_play_check.jpg), `confirm`
+  (with corrections), `setup` (pilot window: pitch check, refit if needed; kit clusters and a stop for the mapping),
+  `run` (all windows, goalkeeper vote for which goal we defend, identity again, stats, coaching pages).
+- Live play cannot be found from people counts alone: halftime warm-ups and other teams after the game look like
+  play. On game 1 the proposal put the restart 3 min before kick-off and the end 3 min early. So the contact sheet
+  steps through both boundaries a minute at a time and the owner confirms. Water breaks (hot games, midway through
+  each half) are stoppages, not a change of ends: halftime is the longest break near the middle.
+- Game 2 (data/g0922, 90 min video): first half 0:00 to 40:40, halftime short (empty pitch 42:20, huddle 43:20),
+  second half 43:40 to about 86:00 (play-like scenes to 86:00, a cluster at 87:00; the end is the least certain
+  boundary). 17 windows. Same venue as game 1.
+- Pitch camera: the pilot fixed 77% of frames (game 1: 89 to 100%). Not the tripod: an anchor-free refit
+  (pitch_ptz.py refit, the line stage of `fit` on the new game's own fixed frames) moved the centre 5 cm. The
+  painted lines are fainter in this game's light (accepted frames score a median 3198 vs 4270; rejected ones 1788,
+  just under the 2000 cut). Gaps are bridged by camera motion: longest 14 s, and the noise floor (25.5 m/min) sits
+  inside game 1's range (16.8 to 28.7). So `setup` gates on at least 70% fixed and no gap over 20 s, not 90%.
+- Kits: the first game's prototypes misread the new opponent (3 opponents per frame, 69% low-confidence roles).
+  Calibrated on the pilot (6 clusters, mapped from the montage; two mixed: officials with some of our bench, and
+  the opponent with some bib-wearers): 8 target and 8 opponent per frame, confidence 0.71, 14% low-confidence.
+- Identity on the pilot: 27% of target samples (game 1 windows 34 to 55%), learned from game 1's labeled windows.
+  Not yet explained.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -361,6 +386,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Per-player stats: player_stats.py --runs data\clipA,data\clipB [--share-dir <folder>] (needs player_identity.csv, identity_segments.csv, tracklet_pitch_xy.csv.gz, events.csv; writes player_stats.csv, player_events.csv, stats_report.json per run and data/stats.sqlite)
 - Jersey suggestions for a new window: jersey_suggest.py suggest --run <run> --from <labeled runs> (DINOv2 on GPU; writes jersey_suggestions.csv, jersey_suggest.npz; jersey_label.py shows them). Score on a labeled window: jersey_suggest.py evaluate --run <run> --from <other runs>
 - Coaching tips for every identified player (local output data/coaching/): coaching_tips.py --runs <windows with identity> (needs data/game.local.json)
+- A new game, end to end: new_game.py plan --video <video> --game <name>; confirm [--first-half/--second-half]; setup (stops once for the kit mapping: team_classify.py assign); run
 - Process game windows end to end, no owner steps (resumable; skips stages whose output exists): run_windows.py --video <game.mp4> --windows clipH=00:00:00,... --labeled <owner-labeled windows> --stats-runs <other windows>
 - Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
 - Confirm rarely labeled jersey numbers (owner, a few minutes): jersey_rare_label.py candidates --runs <windows> --labeled <owner-labeled windows>, then jersey_rare_label.py label (one screen per number: click the crops that show it, Enter). Writes data/jersey_rare_truth.csv; jersey_auto.py finetune picks it up.

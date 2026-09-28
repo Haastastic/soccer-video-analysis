@@ -24,11 +24,21 @@ import numpy as np
 import pandas as pd
 
 from pitch_mask import on_pitch_table
-from sv_common import Cache, cache_stride, cached_per_tracklet, read_frames, require_under_data, sample_rows
+from sv_common import (
+    DATA_DIR,
+    Cache,
+    cache_stride,
+    cached_per_tracklet,
+    game_dir,
+    game_file,
+    read_frames,
+    require_under_data,
+    sample_rows,
+)
 
 ROLES = ["target", "opponent", "official", "goalkeeper", "other"]
 COLOR_COLS = ["torso_r", "torso_g", "torso_b", "legs_r", "legs_g", "legs_b"]
-PROTO_FILE = Path(__file__).resolve().parent / "kit_prototypes.local.json"
+PROTO_FILE = Path(__file__).resolve().parent / "kit_prototypes.local.json"  # the first game's; see proto_file()
 MIN_ROWS = 30  # tracklets shorter than this give unreliable colors
 SAMPLES = 8  # frames re-measured per tracklet
 LAB_COLS = ["torso_L", "torso_a", "torso_b", "legs_L", "legs_a", "legs_b"]
@@ -194,9 +204,17 @@ def write_montage(run: Path, groups: dict, dest: Path, per_row: int = 8) -> bool
     return True
 
 
+def proto_file(run: Path) -> Path:
+    """Kit prototypes for this window's game: <game folder>/kit_prototypes.local.json (kits change between games,
+    home and away), else the first game's file in the repo root."""
+    own = game_file(run, "kit_prototypes.local.json")
+    return own if own.exists() or game_dir(run) != DATA_DIR.resolve() else PROTO_FILE
+
+
 def cmd_assign(args) -> None:
     clusters = json.loads((args.run / "kit_clusters.json").read_text())
-    protos = json.loads(PROTO_FILE.read_text()) if PROTO_FILE.exists() else {"roles": {r: [] for r in ROLES}}
+    path = proto_file(args.run)
+    protos = json.loads(path.read_text()) if path.exists() else {"roles": {r: [] for r in ROLES}}
     for pair in args.map.split(","):
         j, role = pair.split(":")
         if role not in ROLES:
@@ -204,8 +222,8 @@ def cmd_assign(args) -> None:
         protos["roles"][role].append(clusters["centers"][int(j)])
     protos["unknown_dist"] = args.unknown_dist
     protos["descriptor"] = DESCRIPTOR
-    PROTO_FILE.write_text(json.dumps(protos, indent=1))
-    print(f"Wrote {PROTO_FILE.name} (git-ignored): " + ", ".join(f"{r}={len(c)}" for r, c in protos["roles"].items()))
+    path.write_text(json.dumps(protos, indent=1))
+    print(f"Wrote {path} (git-ignored): " + ", ".join(f"{r}={len(c)}" for r, c in protos["roles"].items()))
 
 
 def assign_roles(x, centers, roles, unknown_dist):
@@ -226,9 +244,10 @@ def assign_roles(x, centers, roles, unknown_dist):
 
 def cmd_classify(args) -> None:
     run = args.run
-    if not PROTO_FILE.exists():
-        raise SystemExit("No kit_prototypes.local.json. Run calibrate and assign on a reference clip first.")
-    protos = json.loads(PROTO_FILE.read_text())
+    path = proto_file(run)
+    if not path.exists():
+        raise SystemExit(f"No {path}. Run calibrate and assign on a reference window of this game first.")
+    protos = json.loads(path.read_text())
     if protos.get("descriptor") != DESCRIPTOR:
         raise SystemExit(
             f"Prototypes were made with a different color descriptor. Rerun calibrate and assign ({DESCRIPTOR})."

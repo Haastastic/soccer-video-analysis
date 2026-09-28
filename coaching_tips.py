@@ -17,8 +17,9 @@ Phase 7). Tips are observations to check on video, not verdicts.
 
 Needs data/game.local.json (halftime, our first-half goal end; see jersey_auto.py) and, per window, identity
 (player_identity.csv, identity_segments.csv), tracklet_pitch_xy.csv.gz, tracklet_roles.csv, ball_path.csv and
-pitch_anchors_ptz.local.json. Writes data/coaching/ (git-ignored: names of minors): per player a Markdown report
-and a self-contained HTML page (coaching_html.py), plus index.html, team_overview.md and player_metrics.csv.
+pitch_anchors_ptz.local.json. Writes <game folder>/coaching/ (data/coaching for the first game; git-ignored:
+names of minors): per player a Markdown report and a self-contained HTML page (coaching_html.py), plus
+index.html, team_overview.md and player_metrics.csv.
 
 Example:
   python coaching_tips.py --runs data\\clipH,data\\clipI,data\\clipJ,data\\clipA,data\\clipE,data\\clipF,data\\clipG,...
@@ -35,9 +36,8 @@ import coaching_html
 from jersey_auto import GAME_FILE, PITCH_CAMERA
 from pitch_calibrate import Calibration
 from player_stats import MAX_SPEED_MPS, ROSTER_FILE, SPEED_BANDS, identity_rows, smooth_steps
-from sv_common import Cache, parse_time, require_under_data
+from sv_common import Cache, game_dir, game_file, parse_time, require_under_data
 
-OUT = Path(__file__).resolve().parent / "data" / "coaching"
 NEAR_BALL_M = 10.0  # "near the ball"
 BALL_MATCH_CI = 2  # a ball detection counts for samples within this many cached frames
 MIN_MINUTES = 5.0  # seen at least this long for any tip
@@ -355,13 +355,17 @@ def main() -> None:
     ap.add_argument("--runs", required=True, help="comma list of window folders with identity")
     args = ap.parse_args()
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
-    game = json.loads(GAME_FILE.read_text())
-    cam = json.loads(PITCH_CAMERA.read_text())
+    games = {game_dir(r) for r in runs}
+    if len(games) != 1:
+        raise SystemExit("--runs must be windows of one game (one folder): tips compare players within a game")
+    game = json.loads(game_file(runs[0], GAME_FILE).read_text())
+    cam = json.loads(game_file(runs[0], PITCH_CAMERA).read_text())
+    out = game_dir(runs[0]) / "coaching"
     length, width = cam["length_m"], cam["touchline_near_y"] - cam["touchline_far_y"]
     s = pd.concat([window_samples(r, game, length) for r in runs], ignore_index=True)
     m = metrics(s, game)
-    OUT.mkdir(parents=True, exist_ok=True)
-    m.round(3).to_csv(OUT / "player_metrics.csv", index=False)
+    out.mkdir(parents=True, exist_ok=True)
+    m.round(3).to_csv(out / "player_metrics.csv", index=False)
     outfield = m[m.role != "goalkeeper"]
     lines = [
         "# Team overview",
@@ -377,20 +381,20 @@ def main() -> None:
         keeper = r.role == "goalkeeper"  # no peers to compare with: numbers only
         tips = [] if keeper else tips_for(r, outfield)
         tip_counts[r.jersey] = len(tips)
-        (OUT / f"player_{r.jersey:02d}.md").write_text(report(r, tips, len(runs)), encoding="utf-8")
+        (out / f"player_{r.jersey:02d}.md").write_text(report(r, tips, len(runs)), encoding="utf-8")
         med = pd.Series(dtype=float, index=m.columns).astype(float) if keeper else peer_median(r, outfield)
         page = coaching_html.player_page(
             r, tips, med, s[s.jersey == r.jersey], length, width, len(runs), confidence(r.minutes)
         )
-        (OUT / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
+        (out / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
         name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
         lines.append(
             f"| {name} | {r.role} | {r.minutes:.1f} | {r.m_per_min:.0f} | {r.work_rel:.2f} | "
             f"{r.pct_fast:.1f} | {r.from_goal:.0f} | {r.depth:+.0f} | {r.near_ball_pct:.0f} | {len(tips)} |"
         )
-    (OUT / "team_overview.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    (OUT / "index.html").write_text(coaching_html.team_page(m, tip_counts, len(runs)), encoding="utf-8")
-    print(f"wrote {len(m)} player pages (.html and .md), index.html, team_overview.md, player_metrics.csv to {OUT}")
+    (out / "team_overview.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (out / "index.html").write_text(coaching_html.team_page(m, tip_counts, len(runs)), encoding="utf-8")
+    print(f"wrote {len(m)} player pages (.html and .md), index.html, team_overview.md, player_metrics.csv to {out}")
     print(
         m[["jersey", "role", "minutes", "work_rel", "pct_fast", "depth", "abs_y", "near_ball_pct"]]
         .round(2)

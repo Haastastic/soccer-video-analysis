@@ -3,18 +3,22 @@
 `label` shows one frame at a time (every --step-s seconds), with every player-candidate tracklet's box drawn
 and color-coded by team, plus the pipeline's detected ball position if there is one. One key or click per frame:
 
-  click box    that player has the ball
+  click box    that player has the ball (grey boxes are people the pipeline did not count as players, e.g. a
+               goalkeeper standing still in goal: click them too)
+  u            someone has the ball but has no box at all (not tracked): recorded, but like an unclear frame it
+               ends a possession run in `score`, since there is no player to credit
   n            no one has the ball right now (loose: rolling, in the air, contested)
   x            the ball is not visible / you cannot tell who has it
   s            skip, unsure
   b            back one frame (undo the last label)
   q            save and quit
 
-  mouse wheel  zoom in or out, centered on the cursor - for a crowd of overlapping players
-  right click  pan the zoomed view to that spot
+  mouse wheel  zoom in or out, keeping the point under the cursor - for a crowd of overlapping players; the
+               window grows with the zoom until it fills the screen, then scroll bars appear (drag or click)
+  right click  center the zoomed view on that spot
   r            reset zoom to the full frame
 
-Zoom resets to the full frame automatically whenever you move to a new frame. Progress is saved after every
+Zoom and view carry over from frame to frame (press r to go back to the whole frame). Progress is saved after every
 frame, so rerunning `label` resumes where you stopped. Labels go to OUT/events_truth.csv (git-ignored under
 data/). The frames show people: keep them local.
 
@@ -37,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 from events import TEAM_ROLES, detect
-from sv_common import Cache, cache_stride, read_frames, require_under_data
+from sv_common import FOOTER_H, Cache, ZoomView, add_footer, cache_stride, read_frames, require_under_data
 
 WINDOW = "event label"
 TOL_FRAMES = 5  # a tracklet or ball point within this many cached frames of the target ci counts as present
@@ -51,8 +55,10 @@ def build_items(run: Path, start: float, duration: float, step_s: float) -> list
     ball = pd.read_csv(run / "ball_path.csv").drop_duplicates("ci").set_index("ci").sort_index()
     tr = pd.read_csv(run / "best_tracklets.csv.gz")
     roles = pd.read_csv(run / "tracklet_roles.csv", index_col="track_id")
-    keep = roles.index[roles.player_candidate & roles.role.isin(TEAM_ROLES)]
-    tr = tr[tr.track_id.isin(keep)].sort_values("ci")
+    # every tracked person is drawn and clickable: a goalkeeper standing in goal fails player_candidate's
+    # "static for 8 s" test (owner could not click one, 2026-09-28); non-candidates are drawn thin and grey
+    candidate = roles.player_candidate & roles.role.isin(TEAM_ROLES)
+    tr = tr[tr.track_id.isin(roles.index)].sort_values("ci")
     items = []
     for t in np.arange(start, start + duration, step_s):
         ci = int(round(t * cache.fps))
@@ -70,7 +76,7 @@ def build_items(run: Path, start: float, duration: float, step_s: float) -> list
                         y1=float(row.y1),
                         x2=float(row.x2),
                         y2=float(row.y2),
-                        role=roles.loc[tid, "role"],
+                        role=roles.loc[tid, "role"] if candidate.get(tid, False) else "not a candidate",
                     )
                 )
         bi = ball.index[(ball.index - ci).map(abs) <= TOL_FRAMES]
@@ -111,6 +117,11 @@ class Session:
     def loose(self) -> None:
         self._set(np.nan, "loose")
 
+    def unboxed(self) -> None:
+        """Someone has the ball but has no box (not tracked). Recorded; `score` treats it like an unclear frame (it
+        ends a possession run), since no player can be credited and matching needs a player."""
+        self._set(None, "possessed_unboxed")
+
     def not_visible(self) -> None:
         self._set(np.nan, "not_visible")
 
@@ -131,75 +142,42 @@ class Session:
 
 
 class Viewer:
-    """Draws a frame with player boxes and the ball, and maps clicks to the box they landed in."""
-
-    ZOOM_STEP = 1.25
-    MAX_ZOOM = 8.0
+    """Draws a full-resolution frame with player boxes and the ball, shown through sv_common.ZoomView: the window
+    grows with zoom until the screen constrains it (owner rule), then scroll bars. Clicks map back to frame pixels
+    and to the box they landed in."""
 
     def __init__(self, scale: float):
-        self.base_scale = scale
-        self.canvas_w, self.canvas_h = 0, 0  # fixed display size, set on the first frame
-        self.zoom = 1.0  # 1.0 = whole frame visible; higher crops in, centered on (cx, cy)
-        self.cx, self.cy = None, None  # full-res center of the current view
-        self.view = (0, 0, 0, 0)  # x0, y0, view_w, view_h in full-res pixels, from the last render
-        self.boxes_shown = []  # [(track_id, x1, y1, x2, y2)] in displayed pixels, for click hit-testing
+        self.zv = ZoomView(reserve_h=FOOTER_H, base=scale)
+        self.boxes = []  # [(track_id, x1, y1, x2, y2)] in frame pixels, for click hit-testing
 
     def reset_zoom(self) -> None:
-        self.zoom, self.cx, self.cy = 1.0, None, None
-
-    def zoom_by(self, factor: float, at_full: tuple) -> None:
-        self.cx, self.cy = at_full
-        self.zoom = float(np.clip(self.zoom * factor, 1.0, self.MAX_ZOOM))
-
-    def pan_to(self, at_full: tuple) -> None:
-        self.cx, self.cy = at_full
+        self.zv.reset()
 
     def render(self, img: np.ndarray, item: dict, index: int, total: int, label: dict | None) -> np.ndarray:
-        ih, iw = img.shape[:2]
-        if not self.canvas_w:
-            self.canvas_w, self.canvas_h = int(iw * self.base_scale), int(ih * self.base_scale)
-        cx = self.cx if self.cx is not None else iw / 2
-        cy = self.cy if self.cy is not None else ih / 2
-        vw, vh = iw / self.zoom, ih / self.zoom
-        x0 = float(np.clip(cx - vw / 2, 0, max(0, iw - vw)))
-        y0 = float(np.clip(cy - vh / 2, 0, max(0, ih - vh)))
-        self.view = (x0, y0, vw, vh)
-        crop = img[int(y0) : int(round(y0 + vh)), int(x0) : int(round(x0 + vw))]
-        show = cv2.resize(crop, (self.canvas_w, self.canvas_h), interpolation=cv2.INTER_AREA)
-        sx, sy = self.canvas_w / vw, self.canvas_h / vh
-
-        def to_show(px, py):
-            return int((px - x0) * sx), int((py - y0) * sy)
-
-        self.boxes_shown = []
+        show = img.copy()
+        line = max(1, round(1.5 / self.zv.mag))  # about 1.5 window pixels at any zoom
+        self.boxes = []
         truth_id = label["truth_track_id"] if label and np.isfinite(label.get("truth_track_id", np.nan)) else None
         for b in item["boxes"]:
-            x1, y1 = to_show(b["x1"], b["y1"])
-            x2, y2 = to_show(b["x2"], b["y2"])
+            x1, y1, x2, y2 = (int(b[k]) for k in ("x1", "y1", "x2", "y2"))
             color = ROLE_COLOR.get(b["role"], (200, 200, 200))
-            thick = 3 if b["track_id"] == truth_id else 1
-            cv2.rectangle(show, (x1, y1), (x2, y2), color, thick)
-            cv2.putText(show, str(b["track_id"]), (x1, max(0, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            self.boxes_shown.append((b["track_id"], x1, y1, x2, y2))
+            cv2.rectangle(show, (x1, y1), (x2, y2), color, 3 * line if b["track_id"] == truth_id else line)
+            cv2.putText(show, str(b["track_id"]), (x1, max(0, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * line, color,
+                        line)  # fmt: skip
+            self.boxes.append((b["track_id"], x1, y1, x2, y2))
         if item["ball_xy"]:
-            bx, by = to_show(*item["ball_xy"])
+            bx, by = (int(v) for v in item["ball_xy"])
             color = (0, 255, 0) if item["ball_kind"] == "detected" else (0, 165, 255)
-            cv2.circle(show, (bx, by), max(4, int(10 * sx / self.base_scale)), color, 2)
-        sh, sw = show.shape[:2]
+            cv2.circle(show, (bx, by), 12, color, 2 * line)
         status = f" [{label['verdict']}]" if label else ""
-        zoom_txt = f" zoom {self.zoom:.1f}x" if self.zoom > 1.0 else ""
-        keys = "click=has ball | wheel zoom | right-click pan | r reset | n loose | x n/a | s skip | b back | q quit"
-        text = f"{index + 1}/{total}  t={item['time_s']:.1f}s  ball={item['ball_kind']}{status}{zoom_txt}   {keys}"
-        cv2.rectangle(show, (0, sh - 24), (sw, sh), (0, 0, 0), -1)
-        cv2.putText(show, text, (6, sh - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        return show
-
-    def to_full(self, mx: int, my: int) -> tuple:
-        x0, y0, vw, vh = self.view
-        return x0 + mx * vw / self.canvas_w, y0 + my * vh / self.canvas_h
+        keys = "click=has ball | u has it, no box | n loose | x n/a | s skip | b back | q quit | wheel zoom | r reset"
+        where = f"{index + 1}/{total}  t={item['time_s']:.1f}s  ball={item['ball_kind']}{status}{self.zv.label()}"
+        text = f"{where}   {keys}"
+        return add_footer(self.zv.apply(show), text)
 
     def track_id_at(self, mx: int, my: int) -> int | None:
-        hits = [(tid, x1, y1, x2, y2) for tid, x1, y1, x2, y2 in self.boxes_shown if x1 <= mx <= x2 and y1 <= my <= y2]
+        fx, fy = self.zv.to_content(mx, my)
+        hits = [(tid, x1, y1, x2, y2) for tid, x1, y1, x2, y2 in self.boxes if x1 <= fx <= x2 and y1 <= fy <= y2]
         if not hits:
             return None
         # smallest box wins, so overlapping players resolve to whichever box the click is most specifically inside
@@ -221,12 +199,10 @@ def cmd_label(args) -> None:
     pending = {}
 
     def on_mouse(event, mx, my, flags, _param):
+        if viewer.zv.on_mouse(event, mx, my, flags):  # wheel zoom, right-click pan, scroll bars
+            return
         if event == cv2.EVENT_LBUTTONDOWN:
             pending["click"] = (mx, my)
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            pending["pan"] = (mx, my)
-        elif event == cv2.EVENT_MOUSEWHEEL:
-            pending["zoom"] = (mx, my, 1 if flags > 0 else -1)
 
     cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(WINDOW, on_mouse)
@@ -240,13 +216,7 @@ def cmd_label(args) -> None:
             cv2.imshow(WINDOW, viewer.render(img, item, session.idx, len(items), session.labels.get(session.idx)))
             key = cv2.waitKey(30) & 0xFF
             changed = False
-            if "zoom" in pending:
-                mx, my, direction = pending.pop("zoom")
-                factor = viewer.ZOOM_STEP if direction > 0 else 1 / viewer.ZOOM_STEP
-                viewer.zoom_by(factor, viewer.to_full(mx, my))
-            elif "pan" in pending:
-                viewer.pan_to(viewer.to_full(*pending.pop("pan")))
-            elif "click" in pending:
+            if "click" in pending:
                 mx, my = pending.pop("click")
                 tid = viewer.track_id_at(mx, my)
                 if tid is not None:
@@ -256,6 +226,9 @@ def cmd_label(args) -> None:
                 viewer.reset_zoom()
             elif key == ord("n"):
                 session.loose()
+                changed = True
+            elif key == ord("u"):
+                session.unboxed()
                 changed = True
             elif key == ord("x"):
                 session.not_visible()
@@ -268,8 +241,7 @@ def cmd_label(args) -> None:
                 changed = True
             elif key == ord("q"):
                 break
-            if changed:
-                viewer.reset_zoom()
+            if changed:  # zoom and view carry over to the next frame (owner rule); r resets
                 session.table().to_csv(truth_path, index=False)
     finally:
         cv2.destroyAllWindows()
@@ -283,6 +255,11 @@ def truth_events(truth: pd.DataFrame, roles: pd.DataFrame) -> pd.DataFrame:
     Segments are built only from consecutive rows in the (sorted) truth table whose ci is exactly one label-step
     apart, so an unlabeled, skipped or not-visible frame breaks a segment instead of being bridged over.
     """
+
+    def team_of(tid) -> str:
+        """The team of a labeled possessor, "" when the pipeline gave the track no team role."""
+        return TEAM_ROLES.get(roles.loc[int(tid), "role"], "") if int(tid) in roles.index else ""
+
     t = truth.sort_values("ci").reset_index(drop=True)
     step = int(t.ci.diff().dropna().median()) if len(t) > 1 else 1
     known = t.verdict.isin(["possessed", "loose"])
@@ -311,7 +288,7 @@ def truth_events(truth: pd.DataFrame, roles: pd.DataFrame) -> pd.DataFrame:
                     time_s=float(seg.time_s[a]),
                     end_s=float(seg.time_s[b]),
                     track_id=int(tid),
-                    team=TEAM_ROLES[roles.loc[int(tid), "role"]],
+                    team=team_of(tid),
                     to_track_id=np.nan,
                     to_team="",
                 )
@@ -327,14 +304,16 @@ def truth_events(truth: pd.DataFrame, roles: pd.DataFrame) -> pd.DataFrame:
                         time_s=float(seg.time_s[a2]),
                         end_s=np.nan,
                         track_id=int(id2),
-                        team=TEAM_ROLES[roles.loc[int(id2), "role"]],
+                        team=team_of(id2),
                         to_track_id=np.nan,
                         to_team="",
                     )
                 )
             if pd.isna(id1) or pd.isna(id2) or id1 == id2:
                 continue
-            t1, t2 = TEAM_ROLES[roles.loc[int(id1), "role"]], TEAM_ROLES[roles.loc[int(id2), "role"]]
+            t1, t2 = team_of(id1), team_of(id2)
+            if not t1 or not t2:
+                continue  # a possessor the pipeline did not give a team (e.g. a goalkeeper read as "other")
             events.append(
                 dict(
                     type="pass" if t1 == t2 else "turnover",
