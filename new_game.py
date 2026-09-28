@@ -214,8 +214,23 @@ def cmd_setup(args) -> None:
     camera = folder / "pitch_camera.local.json"
     if not camera.exists():
         shutil.copy(PREVIOUS_CAMERA, camera)
-    # pilot: through the pitch (and the kits' raw colours), not identity yet
-    pilot = run_stages(video, args.game, name, start, upto="pitch_calibrate.py")
+    # kits first: classifying needs this game's kit colours, so stop before it until they exist
+    pilot = run_stages(video, args.game, name, start, upto="team_classify.py")
+    kits = folder / "kit_prototypes.local.json"
+    if not kits.exists():
+        run(["team_classify.py", "calibrate", "--run", pilot])
+        raise SystemExit(
+            f"Kit colours: look at {pilot / 'kit_clusters.png'} (local only) and map the clusters to roles:\n"
+            f"  python team_classify.py assign --run {pilot} --map 0:target,1:opponent,...\n"
+            f"(it writes {kits}), then run `setup` again."
+        )
+    roles = pilot / "tracklet_roles.csv"
+    if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
+        # classified with other kit colours before: redo roles and what depends on them
+        for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
+            (pilot / stale).unlink(missing_ok=True)
+    # then the pitch: the pilot through the camera fit, not identity yet
+    run_stages(video, args.game, name, start, upto="pitch_calibrate.py")
     ok, summary = pitch_ok(pilot)
     print(f"pilot {name}: {summary} with the current camera")
     if not ok and not json.loads(camera.read_text()).get("refit"):
@@ -230,21 +245,6 @@ def cmd_setup(args) -> None:
             "The camera still fixes too few frames. Place a few owner anchors in two windows "
             f"(pitch_anchor_ui.py --run {pilot}), then pitch_ptz.py fit --anchors <those windows> --out {camera}."
         )
-    kits = folder / "kit_prototypes.local.json"
-    if not kits.exists():
-        run(["team_classify.py", "calibrate", "--run", pilot])
-        raise SystemExit(
-            f"Kit colours: look at {pilot / 'kit_clusters.png'} (local only) and map the clusters to roles:\n"
-            f"  python team_classify.py assign --run {pilot} --map 0:target,1:opponent,...\n"
-            f"(it writes {kits}), then run `setup` again."
-        )
-    if (
-        not (pilot / "tracklet_roles.csv").exists()
-        or (pilot / "tracklet_roles.csv").stat().st_mtime < kits.stat().st_mtime
-    ):
-        # classified with the previous game's kits: redo roles and what depends on them
-        for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
-            (pilot / stale).unlink(missing_ok=True)
     run_stages(video, args.game, name, start)
     print(f"setup done: pilot pitch {summary}, kits in {kits.name}. Next: `run`.")
 
@@ -270,6 +270,8 @@ def goal_vote(game: str, names: list, g: dict) -> float | None:
         xy = pd.read_csv(run_dir / "tracklet_pitch_xy.csv.gz", usecols=["ci", "track_id", "X_m"])
         rows = [xy[(xy.track_id == s.track_id) & xy.ci.between(s.ci_start, s.ci_end)] for s in segs.itertuples()]
         x = pd.concat(rows).X_m.median()
+        if not np.isfinite(x):
+            continue  # the stretches fell where the pitch has no positions: no vote from this window
         votes.append(0.0 if x < length / 2 else length)
     if not votes:
         return None
