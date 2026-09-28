@@ -35,7 +35,9 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import cv2
@@ -183,6 +185,11 @@ def windows(g: dict) -> list:
     return out
 
 
+# GPU-heavy stages share the laptop GPU (6 GB): two detections at once barely slow each other, but three identity
+# runs at once (jersey reader + appearance model each) filled GPU memory and took over 40 min instead of about 3
+GPU_SLOTS = {"run_all.py": threading.Semaphore(2), "jersey_auto.py": threading.Semaphore(1)}
+
+
 def run_stages(video: Path, game: str, name: str, start: str, upto: str | None = None) -> Path:
     run_dir = game_folder(game) / name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -192,7 +199,8 @@ def run_stages(video: Path, game: str, name: str, start: str, upto: str | None =
             if upto and cmd[0] == upto:
                 break
             if not done.exists():
-                run(cmd, log)
+                with GPU_SLOTS.get(cmd[0], nullcontext()):
+                    run(cmd, log)
     return run_dir
 
 
