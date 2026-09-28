@@ -344,9 +344,12 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   play. On game 1 the proposal put the restart 3 min before kick-off and the end 3 min early. So the contact sheet
   steps through both boundaries a minute at a time and the owner confirms. Water breaks (hot games, midway through
   each half) are stoppages, not a change of ends: halftime is the longest break near the middle.
-- Game 2 (data/g0922, 90 min video): first half 0:00 to 40:40, halftime short (empty pitch 42:20, huddle 43:20),
-  second half 43:40 to about 86:00 (play-like scenes to 86:00, a cluster at 87:00; the end is the least certain
-  boundary). 17 windows. Same venue as game 1.
+- Game 2 (data/g0922, 90 min video): first half 0:00 to 34:00, halftime 34:00 to 43:40, second half 43:40 to
+  1:20:00; 14 windows. Same venue as game 1. FIRST CONFIRMED WRONG (40:40 and 86:00) from the contact sheet:
+  halftime warm-ups and the next game's players look like play in small thumbnails. Counting OUR players per frame,
+  minute by minute (target-role candidates), showed the ends at once: 6 to 9 in play, falling to 1 in minute 34
+  and minute 80. The 4 windows outside play are kept aside in data/g0922/_outside_play/. new_game.py run now prints
+  this check (a warning for any minute in the halves with fewer than 3 of ours per frame).
 - Pitch camera: the pilot fixed 77% of frames (game 1: 89 to 100%). Not the tripod: an anchor-free refit
   (pitch_ptz.py refit, the line stage of `fit` on the new game's own fixed frames) moved the centre 5 cm. The
   painted lines are fainter in this game's light (accepted frames score a median 3198 vs 4270; rejected ones 1788,
@@ -357,6 +360,11 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   the opponent with some bib-wearers): 8 target and 8 opponent per frame, confidence 0.71, 14% low-confidence.
 - Identity on the pilot: 27% of target samples (game 1 windows 34 to 55%), learned from game 1's labeled windows.
   Not yet explained.
+- GAME 2 DONE (2026-09-28): 14 windows, 18 players, 206 identified player-minutes (game 1: 289). Identity 35 to 55% of
+  target samples per window, about 20% in the last two windows before the end (fading light or late substitutions;
+  not investigated). Goalkeeper vote: we defend X = 0 in the first half. Events on identified players: 114 touches
+  (+39 unconfirmed), 118 possessions. Coaching pages data/g0922/coaching/ (local): 16 observations, including the
+  first fatigue observation to pass the noise bar. Wall time with 3 workers and GPU slots: about 3 h for 9 windows.
 
 ## Phase 12: ball events retuned on owner labels (events.py, 2026-09-28)
 - Ceiling test first (clipA's old window with the owner's ball positions fed in as the path): possession recall
