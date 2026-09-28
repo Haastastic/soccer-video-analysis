@@ -35,6 +35,9 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import cv2
@@ -182,6 +185,11 @@ def windows(g: dict) -> list:
     return out
 
 
+# GPU-heavy stages share the laptop GPU (6 GB): two detections at once barely slow each other, but three identity
+# runs at once (jersey reader + appearance model each) filled GPU memory and took over 40 min instead of about 3
+GPU_SLOTS = {"run_all.py": threading.Semaphore(2), "jersey_auto.py": threading.Semaphore(1)}
+
+
 def run_stages(video: Path, game: str, name: str, start: str, upto: str | None = None) -> Path:
     run_dir = game_folder(game) / name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -191,7 +199,8 @@ def run_stages(video: Path, game: str, name: str, start: str, upto: str | None =
             if upto and cmd[0] == upto:
                 break
             if not done.exists():
-                run(cmd, log)
+                with GPU_SLOTS.get(cmd[0], nullcontext()):
+                    run(cmd, log)
     return run_dir
 
 
@@ -213,21 +222,30 @@ def cmd_setup(args) -> None:
     camera = folder / "pitch_camera.local.json"
     if not camera.exists():
         shutil.copy(PREVIOUS_CAMERA, camera)
-    # kits first: classifying needs this game's kit colours, so stop before it until they exist
-    pilot = run_stages(video, args.game, name, start, upto="team_classify.py")
+    # kits first: classifying needs this game's kit colours, so stop before it until they exist. Colours drift
+    # between halves as the light changes (both games so far: the first half's prototypes read many second-half
+    # players as goalkeeper or unknown), so a pilot in each half is mapped; `assign` adds to the same file.
     kits = folder / "kit_prototypes.local.json"
-    if not kits.exists():
-        run(["team_classify.py", "calibrate", "--run", pilot])
-        raise SystemExit(
-            f"Kit colours: look at {pilot / 'kit_clusters.png'} (local only) and map the clusters to roles:\n"
-            f"  python team_classify.py assign --run {pilot} --map 0:target,1:opponent,...\n"
-            f"(it writes {kits}), then run `setup` again."
-        )
-    roles = pilot / "tracklet_roles.csv"
-    if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
-        # classified with other kit colours before: redo roles and what depends on them
-        for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
-            (pilot / stale).unlink(missing_ok=True)
+    second = [w for w in windows(g) if parse_time(w[1]) >= parse_time(g["second_half"][0])]
+    pilots = [(name, start)] + ([second[len(second) // 2]] if second else [])
+    for pname, pstart in pilots:
+        p = run_stages(video, args.game, pname, pstart, upto="team_classify.py")
+        clusters = p / "kit_clusters.json"
+        mapped = clusters.exists() and kits.exists() and kits.stat().st_mtime > clusters.stat().st_mtime
+        if not mapped:
+            if not clusters.exists():
+                run(["team_classify.py", "calibrate", "--run", p])
+            raise SystemExit(
+                f"Kit colours ({pname}): look at {p / 'kit_clusters.png'} (local only) and map the clusters:\n"
+                f"  python team_classify.py assign --run {p} --map 0:target,1:opponent,...\n"
+                f"(it adds to {kits}), then run `setup` again."
+            )
+        roles = p / "tracklet_roles.csv"
+        if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
+            # classified with other kit colours before: redo roles and what depends on them
+            for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
+                (p / stale).unlink(missing_ok=True)
+    pilot = game_folder(args.game) / name
     # then the pitch: the pilot through the camera fit, not identity yet
     run_stages(video, args.game, name, start, upto="pitch_calibrate.py")
     ok, summary = pitch_ok(pilot)
@@ -286,9 +304,23 @@ def cmd_run(args) -> None:
     if not (game_folder(args.game) / "kit_prototypes.local.json").exists():
         raise SystemExit("Run `setup` first (camera and kits).")
     video, names = Path(g["video"]), windows(g)
-    for name, start in names:
-        print(f"\n{name} ({start})", flush=True)
+    kits = game_folder(args.game) / "kit_prototypes.local.json"
+    for name, _ in names:  # roles classified before the kit colours last changed are redone, with what follows
+        roles = game_folder(args.game) / name / "tracklet_roles.csv"
+        if roles.exists() and roles.stat().st_mtime < kits.stat().st_mtime:
+            for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
+                (roles.parent / stale).unlink(missing_ok=True)
+
+    def one(item):
+        name, start = item
+        print(f"{name} ({start}) started", flush=True)
         run_stages(video, args.game, name, start)
+        print(f"{name} done", flush=True)
+
+    # windows in parallel: two detections at once barely slow each other on the laptop GPU (11.6 vs 11.3 min), and
+    # the pitch fit is CPU work; each worker runs one window's stages in order
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        list(pool.map(one, names))
     if g.get("first_half_our_goal_x") is None:
         x = goal_vote(args.game, [n for n, _ in names], g)
         if x is None:
@@ -325,6 +357,7 @@ def main() -> None:
     s.set_defaults(fn=cmd_setup)
     r = sub.add_parser("run", help="every window, which goal we defend, stats and coaching pages")
     r.add_argument("--game", required=True)
+    r.add_argument("--workers", type=int, default=3, help="windows processed at once (GPU memory: about 2 GB each)")
     r.set_defaults(fn=cmd_run)
     args = ap.parse_args()
     args.fn(args)
