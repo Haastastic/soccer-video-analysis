@@ -188,7 +188,11 @@ def windows(g: dict) -> list:
 
 # GPU-heavy stages share the laptop GPU (6 GB): two detections at once barely slow each other, but three identity
 # runs at once (jersey reader + appearance model each) filled GPU memory and took over 40 min instead of about 3
-GPU_SLOTS = {"run_all.py": threading.Semaphore(2), "jersey_auto.py": threading.Semaphore(1)}
+GPU_SLOTS = {
+    "run_all.py": threading.Semaphore(2),
+    "ball_finetune.py": threading.Semaphore(1),
+    "jersey_auto.py": threading.Semaphore(1),
+}
 
 
 def run_stages(video: Path, game: str, name: str, start: str, upto: str | None = None) -> Path:
