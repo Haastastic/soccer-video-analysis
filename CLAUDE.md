@@ -22,7 +22,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Chose the full-team automated pipeline, with a human review layer and roster constraints for identity.
 - Detection: Ultralytics YOLO (yolo11m) at 1920 px, confidence floor 0.05, cached once.
 - Tracking: never rely on raw tracker IDs for identity. Replay trackers offline, then stitch tracklets. Config in use (2026-09-24): box-only BoT-SORT, 15 fps, high/new 0.7, buffer 1 s, match 0.95 (replay_trackers.py CHOSEN, --grid chosen, the default), chosen by blind owner purity labels (Phase 6).
-- Ball: link candidates over time (ball_link.py). Fine-tune on hand-labeled frames later.
+- Ball: link candidates over time (ball_link.py). Venue ball model (ball_finetune.py, Phase 14) for game 2 and new games.
 - Roster is a closed set of 21 players (one goalkeeper). Identity assignment uses roster constraints plus manual anchors.
 
 ## Phase 1 findings (5 min clip, BoT-SORT at 10 fps)
@@ -431,6 +431,32 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Result: 20 players, 495 identified player-minutes; 34 observations for well-seen players: 3 in every game,
   9 pooled only, 15 in one game only, 2 differ, 5 for players seen enough in one game. UNVERIFIED like all tips.
 
+## Phase 14: a ball detector for this venue (ball_finetune.py, 2026-09-29)
+- Owner labeled 400 game-2 frames with ball_label.py (4 windows x 150 s, 1.5 s apart: w0500, w2000, w4840, w6840;
+  about 30 min; 46% clicked, 42% accepted, 8% not visible). COCO path on them, correct when the ball is visible:
+  40 / 46 / 39 / 65%; w4840 followed a wrong object 48% of the time, w0500 had no ball on 51%.
+- ball_finetune.py: a separate one-class model (yolo11m from COCO), trained on 640 px tiles cut at native scale
+  (2 around each labeled ball, 1 random, up to 3 on confident COCO candidates far from the ball = wrong objects),
+  run on full 1920 px frames at 10 fps. Person detections untouched; ball_link.py --ball-cache uses the new
+  candidates. Training data: game 1's ball labels (clipA, B, D) + game 2's.
+- HELD OUT, two folds (model never saw the test window), linked path at min-conf 0.25:
+  fold A on w4840: correct 39.4 -> 68.1%, wrong object 47.9 -> 23.4%, missing 12.8 -> 8.5%.
+  fold B on w0500: correct 39.5 -> 69.8%, missing 51.2 -> 22.1%, precision 75.6 -> 88.2%.
+  min-conf 0.15 to 0.35 is flat in both folds; 0.25 (the existing default) kept. Tile validation mAP50 about 0.6.
+- Production models/ball/venue.pt (all labels, 40 epochs; both folds peaked near epoch 38). Applied to game 2's
+  14 windows: frames with a detected ball 27-60% -> 48-69% (w4840 unchanged). run_windows.py/new_game.py run it
+  after run_all.py when the model exists (`ball_finetune.py apply`: detect, relink; marker cache/ball_ft_meta.json).
+- EVENTS DID NOT IMPROVE. Held out on 4 event-labeled windows (clipH, clipP with the venue model, w0500 with fold B,
+  w5340): possession F1 0.63 -> 0.61. Game 1 flat (its COCO ball was already adequate for events); game 2 recall up,
+  precision down (w5340 possession 38/53% -> 43/39%). A leave-one-window-out retune on the new paths (contact
+  0.4-0.8, bridge 0.2-1.0, min possession 0.2-0.6) gained 2 of 95 possessions and doubled false turnovers: not
+  adopted. Events are now limited by the event rules, not the ball.
+- Kept: venue model for game 2 and new games (better ball positions feed involvement near the ball). Game 1 stays
+  on the COCO path (clipH/clipP reverted; no game-1 ball labels outside training to show a gain). Note: rerunning
+  run_windows.py on a game-1 window would now apply the venue model.
+- Traps: Ultralytics puts a relative `project` under runs/detect/ (fixed: absolute path, trainer.save_dir). The
+  fold A run logged 9.2 h for 53 epochs (about 1 h of work: the laptop slept).
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -448,6 +474,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Events: events.py --run <run> [--montage] (needs ball_path.csv, tracklet_roles.csv)
 - Hand-label events: event_label.py label --run <run> --start <s> --duration <s>, then event_label.py score --run <run> (writes events_truth.csv, events_score.json)
 - Team roles: team_classify.py calibrate / assign / classify (needs clip.mp4 in the run folder)
+- Venue ball model: ball_finetune.py dataset/train/detect/evaluate (see its --help); pipeline stage: ball_finetune.py apply --run <run> (models/ball/venue.pt, then events.py)
 - Pick validation clips: scan_density.py (samples the whole game, use --reuse to re-pick from a saved scan)
 - Automatic pitch anchors: pitch_autoanchor.py run --run <run> --anchors <owner anchors json> (writes RUN/pitch_anchors_auto.local.json and a report of uncovered stretches), then pitch_calibrate.py apply --anchors RUN/pitch_anchors_auto.local.json. Check against held-out owner anchors: pitch_autoanchor.py evaluate
 - Automatic pitch with no owner anchors (current default): pitch_ptz.py run --run <run> (needs data/pitch_camera.local.json from pitch_ptz.py fit; writes RUN/pitch_anchors_ptz.local.json), then pitch_calibrate.py apply --run <run> --anchors RUN/pitch_anchors_ptz.local.json. Held-out check: pitch_ptz.py evaluate
@@ -476,7 +503,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
 10. RESUME HERE (saved 2026-09-28): two games processed (Phases 9 to 13). Owner's order: (1) DONE (Phase 13):
    two-game coaching view with touches, command: coaching_tips.py --runs <game 1 windows>,<game 2 windows>; it
-   also found and fixed game 2's flipped ends. (2) a ball
+   also found and fixed game 2's flipped ends. (2) DONE (Phase 14): venue ball model, ball path +30 points held
+   out, events unchanged; next lever for events is the event rules. Was: (2) a ball
    detector fine-tuned for this venue (game 2 misses about a third of balls in possessed frames and a quarter of
    its detections are wrong objects; owner ball labels exist for clipA, clipB, clipD; may need ~30 min of owner
    ball labelling on game 2), (3) why identity falls to about 20% in game 2's last two windows, (4) more games

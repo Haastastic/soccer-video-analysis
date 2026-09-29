@@ -1,7 +1,8 @@
 """Process game windows end to end with no owner steps, resumably, then per-player stats across all of them.
 
 Per window (NAME=HH:MM:SS, a 5-minute window starting there, in data/NAME):
-  run_all.py (detection cache, chosen tracker, ball linking) -> pitch_mask.py -> team_classify.py classify
+  run_all.py (detection cache, chosen tracker, ball linking) -> ball_finetune.py apply (the venue ball model
+  relinks the ball path, when models/ball/venue.pt exists) -> pitch_mask.py -> team_classify.py classify
   -> tracklet_stitch.py -> events.py -> pitch_ptz.py run + pitch_calibrate.py apply (automatic pitch)
   -> jersey_auto.py identify --write (automatic identity, learned from the owner-labeled windows in --labeled).
 A stage is skipped when its output already exists, so an interrupted run resumes where it stopped (delete an
@@ -23,6 +24,7 @@ import sys
 import time
 from pathlib import Path
 
+from ball_finetune import FT_META, VENUE_MODEL
 from sv_common import require_under_data
 
 HERE = Path(__file__).resolve().parent
@@ -45,6 +47,8 @@ def stages(video: Path, run_dir: Path, start: str, labeled: list) -> list:
     auto_identity = r / "identity_segments.csv"
     return [
         (r / "ball_path.csv", ["run_all.py", "--video", video, "--start", start, "--duration", "300", "--out", r]),
+        # the venue ball model (ball_finetune.py) replaces the COCO ball path when it exists; events come after
+        *([(r / "cache" / FT_META, ["ball_finetune.py", "apply", "--run", r])] if VENUE_MODEL.exists() else []),
         (r / "tracklet_pitch.csv", ["pitch_mask.py", "--run", r]),
         (r / "tracklet_roles.csv", ["team_classify.py", "classify", "--run", r]),
         # not used by automatic identity; about 1 s, and it keeps jersey_label.py available for a manual spot check

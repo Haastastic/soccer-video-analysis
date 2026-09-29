@@ -118,6 +118,12 @@ def main() -> None:
     )
     ap.add_argument("--fps", type=float, default=10, help="processing rate for linking")
     ap.add_argument(
+        "--ball-cache",
+        default=None,
+        help="ball candidates from this file in RUN/cache (e.g. ball_ft.csv.gz from ball_finetune.py detect) "
+        "instead of the detection cache's COCO ball rows",
+    )
+    ap.add_argument(
         "--min-conf",
         type=float,
         default=0.25,
@@ -151,7 +157,8 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     idxs, fps = cache.processed_indices(args.fps)
     pf_of = {int(ci): k for k, ci in enumerate(idxs)}
-    b = cache.det[(cache.det.cls == BALL) & (cache.det.conf >= args.min_conf) & cache.det.ci.isin(idxs)].copy()
+    det = pd.read_csv(args.run / "cache" / args.ball_cache) if args.ball_cache else cache.det
+    b = det[(det.cls == BALL) & (det.conf >= args.min_conf) & det.ci.isin(idxs)].copy()
     b["pf"] = b.ci.map(pf_of)
     b["cx"] = (b.x1 + b.x2) / 2
     b["cy"] = (b.y1 + b.y2) / 2
@@ -261,6 +268,8 @@ def main() -> None:
     seg_stats = path_df.groupby("seg").size()
 
     report = {
+        "ball_candidates": args.ball_cache or "detections.csv.gz (COCO sports ball)",
+        "min_conf": args.min_conf,
         "processed_frames": n_proc,
         "fps": round(fps, 2),
         "candidates_used": int(len(b)),
