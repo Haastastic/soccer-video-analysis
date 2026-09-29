@@ -22,6 +22,9 @@ Leave a crop unmarked when unsure. Progress is saved after every number, so reru
 Confirmed crops go to data/jersey_rare_truth.csv (git-ignored); `jersey_auto.py finetune` adds them to training.
 Crops show people: keep them local.
 
+`--numbers` targets given numbers instead: game 2's last windows lost identity because two similar numbers, both
+on the pitch late on and never labeled in game 2's light and kit, were read as each other (CLAUDE.md Phase 15).
+
 Example:
   python jersey_rare_label.py candidates --runs data\\clipA,data\\clipB,data\\clipE,data\\clipF,data\\clipG `
       --labeled data\\clipA,data\\clipB,data\\clipE
@@ -79,7 +82,13 @@ def reads_of(run: Path) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
-def find_candidates(runs: list, rare: list, labeled: list) -> pd.DataFrame:
+def find_candidates(
+    runs: list, rare: list, labeled: list, max_per_number: int = MAX_PER_NUMBER, also: dict | None = None
+) -> pd.DataFrame:
+    """also: number -> other texts whose crops are shown on that number's screen too (misreads of it)."""
+    text_to_number = {str(j): j for j in rare}
+    for j, texts in (also or {}).items():
+        text_to_number.update({str(t): j for t in texts})
     out = []
     for run in runs:
         r = reads_of(run)
@@ -88,19 +97,23 @@ def find_candidates(runs: list, rare: list, labeled: list) -> pd.DataFrame:
             known = identity_rows(run, xy)[["ci", "track_id"]].drop_duplicates()
             r = r.merge(known, on=["ci", "track_id"], how="left", indicator=True)
             r = r[r._merge == "left_only"].drop(columns="_merge")
-        r = r[(r.legibility >= MIN_LEGIBILITY) & r.text.isin([str(j) for j in rare])].copy()
+        r = r[(r.legibility >= MIN_LEGIBILITY) & r.text.isin(list(text_to_number))].copy()
         if not len(r):
             continue
-        r["number"] = r.text.astype(int)
+        r["number"] = r.text.map(text_to_number).astype(int)
         r["score"] = r.legibility * r.read_conf
         r = r.sort_values("score", ascending=False).drop_duplicates(["ci", "track_id", "number"])
         r = r.groupby(["number", "track_id"]).head(PER_TRACKLET)
         tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["ci", "track_id", "x1", "y1", "x2", "y2"])
-        out.append(r.merge(tr, on=["ci", "track_id"]).assign(run=run.name))
+        # the window as its path under data/ ("clipA", "g0922/w6840"): label and jersey_auto.py finetune resolve it
+        out.append(r.merge(tr, on=["ci", "track_id"]).assign(run=run.resolve().relative_to(DATA.resolve()).as_posix()))
     if not out:
         return pd.DataFrame()
     c = pd.concat(out, ignore_index=True).sort_values("score", ascending=False)
-    c = c.groupby("number").head(MAX_PER_NUMBER)
+    # round-robin over windows (best read of each window first): the best reads alone can all come from one window,
+    # and the owner's crops should cover the light and framing of every window searched
+    c["rank"] = c.groupby(["number", "run"]).cumcount()
+    c = c.sort_values(["rank", "score"], ascending=[True, False]).groupby("number").head(max_per_number)
     cols = ["number", "run", "ci", "track_id", "x1", "y1", "x2", "y2", "text", "legibility", "read_conf"]
     return c.sort_values(["number", "run", "ci"])[cols].reset_index(drop=True)
 
@@ -108,8 +121,12 @@ def find_candidates(runs: list, rare: list, labeled: list) -> pd.DataFrame:
 def cmd_candidates(args) -> None:
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
     labeled = [require_under_data(Path(r)) for r in args.labeled.split(",")]
-    rare = rare_numbers(labeled, args.min_crops)
-    c = find_candidates(runs, rare, labeled)
+    rare = [int(j) for j in args.numbers.split(",")] if args.numbers else rare_numbers(labeled, args.min_crops)
+    also = {}
+    for item in filter(None, args.also.split(",")):  # "N:T" -> crops read as T shown on N's screen
+        number, text = item.split(":")
+        also.setdefault(int(number), []).append(text)
+    c = find_candidates(runs, rare, labeled, args.max_per_number, also)
     c.to_csv(CANDIDATES, index=False)
     counts = c.groupby("number").size().to_dict() if len(c) else {}
     print(
@@ -269,6 +286,17 @@ def main() -> None:
     c.add_argument("--runs", required=True, help="comma list of windows to search")
     c.add_argument("--labeled", required=True, help="comma list of owner-labeled windows (the reader's training)")
     c.add_argument("--min-crops", type=int, default=30, help="a number is rare below this many labeled crops")
+    c.add_argument("--max-per-number", type=int, default=MAX_PER_NUMBER, help="candidate crops per number at most")
+    c.add_argument(
+        "--also",
+        default="",
+        help="N:T pairs: crops the reader read as T are shown on N's screen too (hard examples of a misread)",
+    )
+    c.add_argument(
+        "--numbers",
+        default="",
+        help="comma list of numbers to confirm instead of the rare ones, e.g. two numbers the reader confuses",
+    )
     c.set_defaults(fn=cmd_candidates)
     lab = sub.add_parser("label", help="confirm which candidate crops show their number")
     lab.set_defaults(fn=cmd_label)
