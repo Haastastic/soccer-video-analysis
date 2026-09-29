@@ -445,7 +445,14 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
-9. RESUME HERE (saved 2026-09-26, later): see Phase 8. (a) DONE 2026-09-26: automatic pitch applied to clipA, B, D,
+10. RESUME HERE (saved 2026-09-28): two games processed (Phases 9 to 12). Owner's order: (1) a two-game coaching
+   view (combine each player across both games; observations consistent in both vs one game; add the retuned
+   ball events per visible minute to tips and pages; coaching_tips.py currently takes one game), (2) a ball
+   detector fine-tuned for this venue (game 2 misses about a third of balls in possessed frames and a quarter of
+   its detections are wrong objects; owner ball labels exist for clipA, clipB, clipD; may need ~30 min of owner
+   ball labelling on game 2), (3) why identity falls to about 20% in game 2's last two windows, (4) more games
+   with new_game.py as videos arrive.
+9. DONE, kept for history (saved 2026-09-26, later): see Phase 8. (a) DONE 2026-09-26: automatic pitch applied to clipA, B, D,
    E, F, player_stats rerun. (b) DONE 2026-09-26: automatic identity (jersey_auto.py identify) with
    read-count trust, production reader, clipF identity written and stats rerun (Phase 8). Open, owner's call:
    raise coverage (about 40% held out, 50% on clipF) by linking identity across tracklets; the goalkeeper (no
