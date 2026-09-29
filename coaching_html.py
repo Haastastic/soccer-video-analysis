@@ -68,6 +68,9 @@ th { color: var(--text-2); font-weight: 600; } td.n, th.n { text-align: right; }
 .wrap { overflow-x: auto; }
 tr.few td { color: var(--text-3); } tr.few small { font-size: 12px; }
 details { margin-top: 8px; } summary { cursor: pointer; color: var(--text-2); font-size: 14px; }
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.duo h3 { font-size: 15px; margin: 8px 0 4px; color: var(--text-2); }
+h3.status { font-size: 15px; margin: 18px 0 8px; }
 .note { font-size: 13px; color: var(--text-3); margin-top: 28px; }
 #tip { position: fixed; pointer-events: none; background: var(--text-1); color: var(--surface); font-size: 13px;
   padding: 4px 8px; border-radius: 4px; display: none; z-index: 10; max-width: 260px; }
@@ -263,6 +266,12 @@ def player_page(
                 f"{r.near_ball_pct:.0f}%" if np.isfinite(r.near_ball_pct) else "–",
                 cmp(med.near_ball_pct, "{:.0f}", "%"),
             ),
+            tile(
+                "Touches per minute",
+                f"{r.touches_per_min:.2f}",
+                f"{r.touch_rel:.2f} × teammates"
+                + (f"; {role}s {med.touch_rel:.2f}" if np.isfinite(med.touch_rel) else ""),
+            ),
         ]
     )
     if r.minutes < 5:
@@ -311,9 +320,10 @@ whisker shows how far this could move by chance (±2 standard errors).</p>
 <details><summary>Table</summary><div class="wrap"><table>
 <tr><th>Part of the game</th><th class="n">Minutes seen</th><th class="n">× teammates</th>
 <th class="n">Windows</th></tr>{rows}</table></div></details>
-<p class="note">Unverified automatic analysis of movement only: no passing, shooting or technique. Numbers are per
-visible minute; the panning camera and automatic identity see about a third to a half of each player's time.
-Check observations on video before acting on them.</p>
+<p class="note">Unverified automatic analysis of movement and touches only: no passing, shooting or technique.
+Touches are the ball-event detector's (it finds about 6 in 10). Numbers are per visible minute; the panning camera
+and automatic identity see about a third to a half of each player's time. Check observations on
+video before acting on them.</p>
 """
     return page(f"{name} coaching", body)
 
@@ -331,7 +341,7 @@ def team_page(m: pd.DataFrame, tip_counts: dict, n_windows: int) -> str:
             f'{" <small>little data</small>" if few else ""}</td><td class="n">{r.jersey}</td>'
             f"<td>{esc(r.role)}</td><td class='n'>{r.minutes:.0f}</td><td class='n'>{r.m_per_min:.0f}</td>"
             f"<td class='n'>{r.work_rel:.2f}</td><td class='n'>{r.pct_fast:.1f}</td>"
-            f"<td class='n'>{r.from_goal:.0f}</td><td class='n'>{near}</td>"
+            f"<td class='n'>{r.from_goal:.0f}</td><td class='n'>{near}</td><td class='n'>{r.touches_per_min:.2f}</td>"
             f"<td class='n'>{tip_counts.get(r.jersey, 0)}</td></tr>"
         )
     body = f"""
@@ -342,9 +352,160 @@ Players are grouped by role (from how deep they play relative to the team). Clic
 <div class="wrap"><table>
 <tr><th>Player</th><th class="n">#</th><th>Role</th><th class="n">Min seen</th><th class="n">m/min</th>
 <th class="n">× team</th><th class="n">Fast %</th><th class="n">From goal m</th><th class="n">Near ball %</th>
-<th class="n">Observations</th></tr>
+<th class="n">Touches /min</th><th class="n">Observations</th></tr>
 {"".join(rows)}</table></div>
-<p class="note">Unverified automatic analysis of movement only. "× team" compares distance per minute with
+<p class="note">Unverified automatic analysis of movement and touches. "× team" compares distance per minute with
 identified teammates in the same windows. Check observations on video before acting on them.</p>
 """
     return page("Team coaching", body)
+
+
+# rows of the per-game comparison table: (label, metrics column, format; "signed" = whole metres with a sign)
+COMPARE = [
+    ("Minutes seen", "minutes", "{:.0f}"),
+    ("Distance per minute (m)", "m_per_min", "{:.0f}"),
+    ("Work rate × teammates", "work_rel", "{:.2f}"),
+    ("Time at 4 m/s or faster (%)", "pct_fast", "{:.1f}"),
+    ("Distance from our goal (m)", "from_goal", "{:.0f}"),
+    ("Depth vs team line (m)", "depth", "signed"),
+    ("From the centre line (m)", "abs_y", "{:.0f}"),
+    ("Near the ball, 10 m (%)", "near_ball_pct", "{:.0f}"),
+    ("Touches per minute", "touches_per_min", "{:.2f}"),
+    ("Touches × teammates", "touch_rel", "{:.2f}"),
+    ("On the ball (% of time)", "on_ball_pct", "{:.1f}"),
+]
+STATUS_TEXT = {
+    "both": ("In every game", "Seen in each game on its own: the most trustworthy."),
+    "pooled": ("With the games pooled", "Only clear with both games' minutes together; not in each game alone."),
+    "one": ("In one game only", "One game shows it, the other does not: may be about that game."),
+    "differs": ("Differs between games", "Games point opposite ways: no pattern yet."),
+    "single": ("One game seen enough", "Only one game has at least 5 minutes of this player."),
+}
+
+
+def fmt_value(v, fmt: str) -> str:
+    if v is None or pd.isna(v):
+        return "–"
+    return signed(v) if fmt == "signed" else fmt.format(v)
+
+
+def multi_player_page(r: pd.Series, rows: dict, meds: dict, tagged: list, samples: dict, confidence: str) -> str:
+    """One player across games. r: pooled metrics; rows: game label -> that game's metrics; meds: "Pooled" and game
+    label -> the role's peer median; tagged: observations with status and evidence (coaching_tips.tag_tips);
+    samples: game label -> (samples, pitch length, width)."""
+    name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
+    role = r.role
+    labels = list(rows)
+    head = "".join(f'<th class="n">{esc(k)}</th>' for k in labels)
+    role_cells = "".join(f"<td class='n'>{esc(rows[k].role)}</td>" for k in labels)
+    body_rows = [f"<tr><td>Role</td>{role_cells}<td class='n'><b>{esc(role)}</b></td><td class='n'>–</td></tr>"]
+    for label, key, fmt in COMPARE:
+        cells = "".join(f"<td class='n'>{fmt_value(rows[k].get(key), fmt)}</td>" for k in labels)
+        peer = "–" if key == "minutes" else fmt_value(meds["Pooled"].get(key), fmt)
+        body_rows.append(
+            f"<tr><td>{esc(label)}</td>{cells}<td class='n'><b>{fmt_value(r.get(key), fmt)}</b></td>"
+            f"<td class='n'>{peer}</td></tr>"
+        )
+    table = (
+        f'<div class="wrap"><table><tr><th></th>{head}<th class="n">Both games</th>'
+        f'<th class="n">{esc(role)}s, both</th></tr>{"".join(body_rows)}</table></div>'
+    )
+    seen = " · ".join(f"{esc(k)}: {rows[k].minutes:.0f} min" for k in labels)
+    game_roles = {rows[k].role for k in labels if rows[k].minutes >= 5}
+    roles_note = " (a different role in each game: see the table)" if len(game_roles) > 1 else ""
+    tiles = "".join(
+        [
+            tile("Seen", f"{r.minutes:.0f} min", f"{seen} · confidence {confidence}"),
+            tile("Work rate", f"{r.work_rel:.2f} ×", "teammates in the same minutes, both games"),
+            tile("Touches per minute", f"{r.touches_per_min:.2f}", f"{r.touch_rel:.2f} × teammates, both games"),
+        ]
+    )
+    if r.role == "goalkeeper":
+        obs = "<p class='sub'>Goalkeeper: numbers only (no other goalkeeper to compare with).</p>"
+    elif r.minutes < 5:
+        obs = "<p class='sub'>Not enough time seen for observations (under 5 min).</p>"
+    elif not tagged:
+        obs = "<p class='sub'>Nothing stands out against others in the same role, in either game or both together.</p>"
+    else:
+        parts = []
+        for status, (title, expl) in STATUS_TEXT.items():
+            group = [f for f in tagged if f["status"] == status]
+            if not group:
+                continue
+            items = []
+            for f in group:
+                cls = "strength" if "strength" in f["kind"] else ""
+                ev = "".join(f'<span class="ev">{esc(k)}: {esc(e)}</span>' for k, e in f["evidence"])
+                items.append(f'<li class="{cls}"><span class="kind">{esc(f["kind"])}.</span> {esc(f["text"])}{ev}</li>')
+            parts.append(
+                f'<h3 class="status">{esc(title)}</h3><p class="sub">{esc(expl)}</p>'
+                f'<ul class="obs">{"".join(items)}</ul>'
+            )
+        obs = "".join(parts)
+    heat, phases = [], []
+    for k, (smp, length, width) in samples.items():
+        if k not in rows:
+            continue
+        svg, legend = heatmap_svg(smp.from_goal.to_numpy(), smp.y_team.to_numpy(), length, width)
+        heat.append(f"<div><h3>{esc(k)} · {rows[k].minutes:.0f} min</h3>{svg}{legend}</div>")
+        phases.append(f"<div><h3>{esc(k)}</h3>{phase_svg(rows[k])}</div>")
+    body = f"""
+<p><a href="index.html">← Team</a></p>
+<div class="private">Private: automatic analysis of youth games, with names. Keep on this computer; do not post.</div>
+<h1>{esc(name)} <span style="color:var(--text-3);font-weight:400">#{r.jersey}</span></h1>
+<p class="sub">{esc(role.capitalize())} over both games{roles_note} · seen in {len(labels)} of them</p>
+<div class="tiles">{tiles}</div>
+<h2>Observations</h2>
+{obs}
+<h2>Game by game</h2>
+<p class="sub">Each game on its own, both together, and the median of the other {esc(role)}s with both games together.
+Work rate and touches are ratios to identified teammates in the same minutes (1.0 = team median), so a game's own
+conditions and ball detection cancel.</p>
+{table}
+<h2>Where they play</h2>
+<p class="sub">Share of visible time in each part of the pitch, always attacking to the right.</p>
+<div class="duo">{"".join(heat)}</div>
+<h2>Work rate through each game</h2>
+<p class="sub">Compared with identified teammates at the same time; the whisker is ±2 standard errors.</p>
+<div class="duo">{"".join(phases)}</div>
+<p class="note">Unverified automatic analysis of movement and touches only: no passing, shooting or technique.
+Touches are the ball-event detector's (it finds about 6 in 10, fewer in the second game). The panning camera and
+automatic identity see about a third to a half of each player's time. Check observations on video before acting.</p>
+"""
+    return page(f"{name} across games", body)
+
+
+def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list) -> str:
+    order = {"goalkeeper": 0, "defender": 1, "midfielder": 2, "forward": 3}
+    m = m.assign(_o=m.role.map(order)).sort_values(["_o", "minutes"], ascending=[True, False])
+    rows = []
+    for _, r in m.iterrows():
+        few = r.minutes < 5
+        name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
+        mins = "".join(f"<td class='n'>{per[k].set_index('jersey').minutes.get(r.jersey, 0):.0f}</td>" for k in labels)
+        t = tagged.get(r.jersey, [])
+        n_both = sum(f["status"] == "both" for f in t)
+        rows.append(
+            f'<tr{" class=few" if few else ""}><td><a href="player_{r.jersey:02d}.html">{esc(name)}</a>'
+            f'{" <small>little data</small>" if few else ""}</td><td class="n">{r.jersey}</td>'
+            f"<td>{esc(r.role)}</td>{mins}<td class='n'>{r.work_rel:.2f}</td>"
+            f"<td class='n'>{r.pct_fast:.1f}</td><td class='n'>{r.touches_per_min:.2f}</td>"
+            f"<td class='n'>{fmt_value(r.touch_rel, '{:.2f}')}</td><td class='n'>{n_both}</td>"
+            f"<td class='n'>{len(t)}</td></tr>"
+        )
+    game_heads = "".join(f'<th class="n">Min {esc(k)}</th>' for k in labels)
+    body = f"""
+<div class="private">Private: automatic analysis of youth games, with names. Keep on this computer; do not post.</div>
+<h1>Team across games</h1>
+<p class="sub">{len(labels)} games, {len(m)} players, {m.minutes.sum():.0f} identified player-minutes. Roles from how
+deep each player plays relative to the team, over both games. Click a name for their page.</p>
+<div class="wrap"><table>
+<tr><th>Player</th><th class="n">#</th><th>Role</th>{game_heads}<th class="n">Work × team</th>
+<th class="n">Fast %</th><th class="n">Touches /min</th><th class="n">Touches × team</th>
+<th class="n">Obs. in every game</th><th class="n">Obs. total</th></tr>
+{"".join(rows)}</table></div>
+<p class="note">Unverified automatic analysis of movement and touches. "× team" compares with identified teammates in
+the same windows. An observation "in every game" showed up in each game on its own; the rest need more games before
+they mean much. Check observations on video before acting on them.</p>
+"""
+    return page("Team across games", body)
