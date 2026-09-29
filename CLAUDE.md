@@ -457,6 +457,31 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Traps: Ultralytics puts a relative `project` under runs/detect/ (fixed: absolute path, trainer.save_dir). The
   fold A run logged 9.2 h for 53 epochs (about 1 h of work: the laptop slept).
 
+## Phase 15: game 2's late identity drop, and height as a cue (2026-09-29)
+- Game 2's last two windows (w6840, w7340) identified 19 to 20% of target samples vs 28 to 55% elsewhere. Ruled
+  out: fading light (they are the brightest windows), off-pitch "ours" in the denominator (about 1 point), more
+  swaps inside tracklets (17 vs 18 conflicting tracklets per window). Cause: a late substitute whose number the
+  reader confused with a similar teammate's number (never labeled in game 2's light and kit), so their tracklets'
+  reads split and failed the 80% agreement rule; fewer legible crops (6% in w6840 vs 8 to 16%) added to it.
+- Fix: owner confirmed crops of the two numbers across game 2 (jersey_rare_label.py candidates --numbers, 72 per
+  number spread round-robin over windows; about 5 min) and a second screen on the two late windows, including crops
+  the reader had read as the other number (--also N:T; about 2 min). Reader retrained, both games re-identified:
+  w6840 18.8 -> 24.4%, w7340 20.2 -> 22.4%; other windows within about +-2 points (several up); identified
+  player-minutes over both games 495 -> 511. The late windows stay low: accepted as a legibility limit there.
+  The owner rejected every candidate of the other number in the late windows (it was off the pitch).
+- jersey_rare_label.py: crops of windows in game folders are stored as g0922/wNNNN (the path under data/).
+- HEIGHT (experiment, data/_height_exp/, not in the pipeline). Height per detection from the fixed camera centre
+  and the ground homography: h = C_z (1 - dF / dG), dF the feet's and dG the head ray's ground distance from the
+  camera. On the owner-labeled windows (59k clean detections, 18 players): median 1.70 m; the same player agrees
+  within about 2 cm across windows (sd), players spread 7 cm (sd; 1.55 to 1.86 m); 58% of player pairs separable
+  at 2 sd with a window of data. A tracklet part pins height to about 8 cm (5 to 10 s) or 5 cm (20 s+).
+  Across games it carries (unlike appearance): 17 players, correlation 0.91, game 2 about 3 cm lower overall
+  (camera refit), 3 cm sd after that offset. The confused pair above has the same height: no help there.
+- Height as a filter on trusted stretches (leave-one-window-out, held-out readers): wrong stretches differ from the
+  named player by 10.8 cm (median) vs 3.0 cm for right ones, but identity is already 97.8% right (8 wrong
+  stretches); the best rule drops 7% of right time for +1 point. Not adopted. Still worth testing: height in
+  linking unidentified stretches (exp10 reached 87% right with motion and appearance only).
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -504,7 +529,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 10. RESUME HERE (saved 2026-09-28): two games processed (Phases 9 to 13). Owner's order: (1) DONE (Phase 13):
    two-game coaching view with touches, command: coaching_tips.py --runs <game 1 windows>,<game 2 windows>; it
    also found and fixed game 2's flipped ends. (2) DONE (Phase 14): venue ball model, ball path +30 points held
-   out, events unchanged; next lever for events is the event rules. Was: (2) a ball
+   out, events unchanged; next lever for events is the event rules. (3) DONE (Phase 15): late identity drop
+   explained (a substitute's number misread as a teammate's), partly fixed (19-20% -> 22-24%). Next: height in
+   linking (Phase 15), more games. Was: (2) a ball
    detector fine-tuned for this venue (game 2 misses about a third of balls in possessed frames and a quarter of
    its detections are wrong objects; owner ball labels exist for clipA, clipB, clipD; may need ~30 min of owner
    ball labelling on game 2), (3) why identity falls to about 20% in game 2's last two windows, (4) more games
