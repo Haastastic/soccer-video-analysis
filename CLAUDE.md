@@ -479,8 +479,15 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   (camera refit), 3 cm sd after that offset. The confused pair above has the same height: no help there.
 - Height as a filter on trusted stretches (leave-one-window-out, held-out readers): wrong stretches differ from the
   named player by 10.8 cm (median) vs 3.0 cm for right ones, but identity is already 97.8% right (8 wrong
-  stretches); the best rule drops 7% of right time for +1 point. Not adopted. Still worth testing: height in
-  linking unidentified stretches (exp10 reached 87% right with motion and appearance only).
+  stretches); the best rule drops 7% of right time for +1 point. Not adopted.
+- Height in linking unidentified stretches (exp12.py = exp10 + a height term: unit height vs the candidate's height
+  from their read-identified units in the window, "someone else" vs the team's spread). Leave-one-window-out, same
+  windows as exp10. Mean added coverage / pooled precision: without height, margin 3: +8.9% at 88.9%, margin 5:
+  +4.4% at 90.6%; with height (weight 1), margin 5: +5.4% at 94.4%; weight 2: +7.2% at 91.9%. Per window, height
+  helps clipE (margin 5: +6.5 -> +8.4% at 97 to 98%) and clipA (+4.6 -> +5.6% at 89 -> 97%), but clipB (the other
+  half) stays at 63 to 73% right with or without it: its wrong links come from motion, appearance and its own
+  misread base identity, not from height. NOT ADOPTED: no setting clears about 95% on every window, and trusted
+  identity is 91 to 99.8%. Linking stays shelved; coverage needs more players read at all (Phase 8).
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
@@ -531,7 +538,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
    also found and fixed game 2's flipped ends. (2) DONE (Phase 14): venue ball model, ball path +30 points held
    out, events unchanged; next lever for events is the event rules. (3) DONE (Phase 15): late identity drop
    explained (a substitute's number misread as a teammate's), partly fixed (19-20% -> 22-24%). Next: height in
-   linking (Phase 15), more games. Was: (2) a ball
+   linking (tested, Phase 15: not adopted), more games. Was: (2) a ball
    detector fine-tuned for this venue (game 2 misses about a third of balls in possessed frames and a quarter of
    its detections are wrong objects; owner ball labels exist for clipA, clipB, clipD; may need ~30 min of owner
    ball labelling on game 2), (3) why identity falls to about 20% in game 2's last two windows, (4) more games
