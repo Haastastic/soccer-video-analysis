@@ -402,6 +402,35 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   about 3): the stages share GPU slots, at most 2 detections and 1 identity run at a time. Windows whose roles
   predate the kit file are redone automatically.
 
+## Phase 13: coaching across games, touches in tips, game 2's ends fixed (2026-09-28)
+- coaching_tips.py takes windows from several games: each game is measured alone and pooled; a player is compared
+  with their role in each game (roles can change) and pooled. Each observation is tagged: in every game the player
+  was seen 5+ min in, only with the games pooled, in one game only, or differs (opposite directions in two games).
+  Output data/coaching_games/ (local): index.html, player_NN.html (per-game comparison table, a heatmap and
+  work-rate chart per game), team_overview.md, player_metrics.csv (scope column). One game works as before.
+  Games are labeled by the date in game.local.json "video" (added to data/game.local.json).
+- Touches in tips and pages (both modes): touches per visible minute, against the touches identified outfield
+  teammates made per minute in the same windows (leave-self-out expected count, so each window's ball detection
+  cancels), then against the role's median ratio with a one-sided Poisson test (p < 0.025, 35% gap, 5+ expected).
+  All confidences count: the Phase 12 grid chose no confidence cut (min_conf 0 same precision, more recall).
+  Passes and turnovers are not used (unreliable). Share of visible time on the ball is shown, not tipped.
+- Stale events: game 2's w0500 and w2500 events.csv predated the Phase 12 defaults (events doubled on rerun).
+  Every window's events and player_stats were rerun.
+- FOUND AND FIXED: game 2's first_half_our_goal_x was wrong (0; truly the far end). The goalkeeper vote had
+  followed the OPPONENT's goalkeeper (identified with the appearance cutoff 0.1). Seen as player depths mirrored
+  between the games (forwards of one game were defenders of the other, midfielders at 0). Confirmed by the second-
+  half kickoff (w4340, first 20 s: our players median X 33, opponents 58; one downscaled still, deleted) and by the
+  identified "goalkeeper" standing at the opponents' end then. Fixed in data/g0922/game.local.json; identity,
+  events, stats and pages redone for game 2. Players seen 5+ min in both games with the same role: 2 of 13 before,
+  11 of 13 after. Game 2 goalkeeper now 7 min, 16 m behind the team line. Identity coverage per window unchanged
+  (19 to 55%), so item (3) below still stands.
+- new_game.py run now cross-checks the goalkeeper vote with kickoff_end (which half our players stand in during the
+  first 30 s of the second half: median X gap 10 m+, 70% of frames agreeing) and stops for the owner if they
+  disagree. Tried and dropped as end signals: our median X minus the opponents' over whole windows (near 0, sign
+  flips within a half on game 1), and scanning every frame for a clean halfway split (false hit in game 1).
+- Result: 20 players, 495 identified player-minutes; 34 observations for well-seen players: 3 in every game,
+  9 pooled only, 15 in one game only, 2 differ, 5 for players seen enough in one game. UNVERIFIED like all tips.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -429,7 +458,7 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Stitch tracklets: tracklet_stitch.py --run <run> [--montage] (needs tracklet_roles.csv, tracklet_colors.csv; writes tracklet_stitch.csv)
 - Per-player stats: player_stats.py --runs data\clipA,data\clipB [--share-dir <folder>] (needs player_identity.csv, identity_segments.csv, tracklet_pitch_xy.csv.gz, events.csv; writes player_stats.csv, player_events.csv, stats_report.json per run and data/stats.sqlite)
 - Jersey suggestions for a new window: jersey_suggest.py suggest --run <run> --from <labeled runs> (DINOv2 on GPU; writes jersey_suggestions.csv, jersey_suggest.npz; jersey_label.py shows them). Score on a labeled window: jersey_suggest.py evaluate --run <run> --from <other runs>
-- Coaching tips for every identified player (local output data/coaching/): coaching_tips.py --runs <windows with identity> (needs data/game.local.json)
+- Coaching tips for every identified player (local output data/coaching/, or data/<game>/coaching/): coaching_tips.py --runs <windows with identity> (needs the game.local.json). Windows of several games -> data/coaching_games/ (per-game and pooled, observations tagged by game)
 - A new game, end to end: new_game.py plan --video <video> --game <name>; confirm [--first-half/--second-half]; setup (stops once for the kit mapping: team_classify.py assign); run
 - Process game windows end to end, no owner steps (resumable; skips stages whose output exists): run_windows.py --video <game.mp4> --windows clipH=00:00:00,... --labeled <owner-labeled windows> --stats-runs <other windows>
 - Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
@@ -445,9 +474,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
-10. RESUME HERE (saved 2026-09-28): two games processed (Phases 9 to 12). Owner's order: (1) a two-game coaching
-   view (combine each player across both games; observations consistent in both vs one game; add the retuned
-   ball events per visible minute to tips and pages; coaching_tips.py currently takes one game), (2) a ball
+10. RESUME HERE (saved 2026-09-28): two games processed (Phases 9 to 13). Owner's order: (1) DONE (Phase 13):
+   two-game coaching view with touches, command: coaching_tips.py --runs <game 1 windows>,<game 2 windows>; it
+   also found and fixed game 2's flipped ends. (2) a ball
    detector fine-tuned for this venue (game 2 misses about a third of balls in possessed frames and a quarter of
    its detections are wrong objects; owner ball labels exist for clipA, clipB, clipD; may need ~30 min of owner
    ball labelling on game 2), (3) why identity falls to about 20% in game 2's last two windows, (4) more games

@@ -7,7 +7,11 @@ player. Ball events are too sparse to use (CLAUDE.md Phase 7), so tips come from
   - positioning: distance from our own goal, depth ahead of or behind the team line (median of the visible
     teammates at that moment), width, and how much the player roams;
   - fatigue: late vs early in each half and second half vs first, relative to teammates at the same time;
-  - involvement: time within NEAR_BALL_M of the ball and distance to it, on detected ball positions only.
+  - involvement: time within NEAR_BALL_M of the ball and distance to it, on detected ball positions only;
+  - ball events (events.py, retuned on owner labels in CLAUDE.md Phase 12): touches (gaining the ball) per visible
+    minute, against the touches identified teammates made per minute in the same windows (each window's ball
+    detector quality cancels), and share of visible time on the ball. Every event counts, whatever its confidence:
+    the retune found no confidence cut that helped. Passes and turnovers are too unreliable to use.
 Each player gets a rough role from depth relative to the team line (deepest third defenders, highest third
 forwards; the roster's goalkeeper) and is compared with the others in that role. A tip needs MIN_MINUTES of the
 player seen and a difference past the thresholds below; every tip lists its evidence and a confidence.
@@ -15,28 +19,37 @@ player seen and a difference past the thresholds below; every tip lists its evid
 Thresholds are hand-set guesses, and the running numbers are unverified against measured distances (CLAUDE.md
 Phase 7). Tips are observations to check on video, not verdicts.
 
+Several games (--runs from more than one game folder): each game is measured on its own and pooled, a player is
+compared with the others in their role in each game (roles can change between games) and over the pooled games,
+and each observation says whether it holds in every game the player was seen enough in, only with the games
+pooled, in one game only, or points opposite ways in two games. Output goes to data/coaching_games/ (local only).
+Games are labeled by the date in game.local.json's "video", else the folder.
+
 Needs data/game.local.json (halftime, our first-half goal end; see jersey_auto.py) and, per window, identity
 (player_identity.csv, identity_segments.csv), tracklet_pitch_xy.csv.gz, tracklet_roles.csv, ball_path.csv and
 pitch_anchors_ptz.local.json. Writes <game folder>/coaching/ (data/coaching for the first game; git-ignored:
 names of minors): per player a Markdown report and a self-contained HTML page (coaching_html.py), plus
 index.html, team_overview.md and player_metrics.csv.
 
-Example:
+Examples:
   python coaching_tips.py --runs data\\clipH,data\\clipI,data\\clipJ,data\\clipA,data\\clipE,data\\clipF,data\\clipG,...
+  python coaching_tips.py --runs data\\clipA,...,data\\g0922\\w0000,...     (two games -> data\\coaching_games)
 """
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import poisson
 
 import coaching_html
 from jersey_auto import GAME_FILE, PITCH_CAMERA
 from pitch_calibrate import Calibration
 from player_stats import MAX_SPEED_MPS, ROSTER_FILE, SPEED_BANDS, identity_rows, smooth_steps
-from sv_common import Cache, game_dir, game_file, parse_time, require_under_data
+from sv_common import DATA_DIR, Cache, game_dir, game_file, parse_time, require_under_data
 
 NEAR_BALL_M = 10.0  # "near the ball"
 BALL_MATCH_CI = 2  # a ball detection counts for samples within this many cached frames
@@ -47,6 +60,9 @@ DEPTH_DIFF_M, WIDTH_DIFF_M, ROAM_DIFF = 5.0, 5.0, 0.35
 SOLID_WINDOW_S = 60.0  # a window counts toward the noise estimate and the evidence with this much of the player
 MIN_GAP_FAST_PP, MIN_GAP_BALL_PP = 1.5, 5.0  # and at least this many percentage points (small shares are noisy)
 # work-rate and fatigue differences must also exceed 2 standard errors from the measured window-to-window spread
+TOUCH_DIFF, TOUCH_P, MIN_EXPECTED = 0.35, 0.025, 5.0  # touches vs the role: relative gap, one-sided Poisson p, and
+# at least this many touches expected (fewer cannot show a difference)
+MULTI_OUT = DATA_DIR / "coaching_games"
 
 
 def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
@@ -85,6 +101,39 @@ def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
     return d
 
 
+def window_events(run: Path) -> pd.DataFrame:
+    """Touches and possessions of identified players (player_stats.py's player_events.csv), every confidence."""
+    ev = pd.read_csv(run / "player_events.csv")
+    ev = ev[ev.type.isin(["touch", "possession"]) & ev.jersey.notna()].copy()
+    ev["jersey"] = ev.jersey.astype(int)
+    ev["dur_s"] = np.where(ev.type == "possession", ev.end_s - ev.time_s, 0.0)
+    ev["run"] = run.name
+    return ev[["run", "jersey", "type", "time_s", "dur_s", "confidence"]]
+
+
+def game_label(folder: Path, game: dict) -> str:
+    """The date in the game's video name, else the folder name."""
+    m = re.search(r"\d{4}-\d{2}-\d{2}", str(game.get("video", "")))
+    return m.group(0) if m else folder.name
+
+
+def load_game(runs: list) -> dict:
+    """One game's samples (with phase), events and pitch size. Window keys are prefixed by the game label, so two
+    games' windows never share a key."""
+    folder = game_dir(runs[0])
+    game = json.loads(game_file(runs[0], GAME_FILE).read_text())
+    cam = json.loads(game_file(runs[0], PITCH_CAMERA).read_text())
+    label = game_label(folder, game)
+    length, width = cam["length_m"], cam["touchline_near_y"] - cam["touchline_far_y"]
+    s = pd.concat([window_samples(r, game, length) for r in runs], ignore_index=True)
+    s["phase"] = phase(s.t_min, game["halftime_min"], float(s.t_min.max()))
+    ev = pd.concat([window_events(r) for r in runs], ignore_index=True)
+    for d in (s, ev):
+        d["run"] = label + "/" + d.run
+        d["game"] = label
+    return dict(folder=folder, label=label, runs=runs, length=length, width=width, s=s, ev=ev)
+
+
 def phase(t_min: pd.Series, halftime: float, game_end: float) -> pd.Series:
     """early/late half of each half, split at each half's midpoint of covered time."""
     h1_mid, h2_mid = halftime / 2, (halftime + game_end) / 2
@@ -100,16 +149,38 @@ def solid_k(q: pd.DataFrame) -> int:
     return int((q.n >= SOLID_WINDOW_S * q.fps).sum())
 
 
-def metrics(s: pd.DataFrame, game: dict) -> tuple:
-    """Per-player metrics and per-(player, run) relative work rates."""
+def touch_expectation(per: pd.DataFrame, ev: pd.DataFrame, keepers: set) -> pd.DataFrame:
+    """Adds touches, poss_s and exp_touch per (jersey, run): exp_touch is the player's minutes times the rate of
+    touches per minute of the other identified outfield players in that window, so each window's ball detection
+    (game 2's detector misses about a third of balls, Phase 12) cancels. Keepers do not count toward the rate."""
+    per = per.copy()
+    per["mins"] = per.n / per.fps / 60
+    per["touches"] = ev[ev.type == "touch"].groupby(["jersey", "run"]).size().reindex(per.index).fillna(0)
+    poss = ev[ev.type == "possession"].groupby(["jersey", "run"]).dur_s.sum()
+    per["poss_s"] = poss.reindex(per.index).fillna(0)
+    field = ~per.index.get_level_values("jersey").isin(keepers)
+    runs = per.index.get_level_values("run")
+    tot_t = per.touches.where(field, 0).groupby(level="run").sum()
+    tot_m = per.mins.where(field, 0).groupby(level="run").sum()
+    others_t = runs.map(tot_t).to_numpy() - np.where(field, per.touches, 0)
+    others_m = runs.map(tot_m).to_numpy() - np.where(field, per.mins, 0)
+    per["exp_touch"] = np.where(others_m > 0, per.mins * others_t / np.maximum(others_m, 1e-9), 0.0)
+    return per
+
+
+def metrics(s: pd.DataFrame, ev: pd.DataFrame) -> pd.DataFrame:
+    """Per-player metrics. s needs a phase column (load_game)."""
     s = s[s.speed.isna() | (s.speed <= MAX_SPEED_MPS)].copy()
-    s["phase"] = phase(s.t_min, game["halftime_min"], float(s.t_min.max()))
+    s["jersey"] = s.jersey.astype(int)
     s["fast"] = s.speed >= SPEED_BANDS["run"][0]
     s["sprint"] = s.speed >= SPEED_BANDS["fast"][0]
+    roster = pd.read_csv(ROSTER_FILE)
+    keepers = set(roster.jersey[roster.goalkeeper.astype(str).str.lower() == "true"].astype(int))
     # relative work rate: this player's mean speed / the median of identified teammates in the same window
     per = s.groupby(["jersey", "run"]).agg(v=("speed", "mean"), n=("speed", "size"), fps=("fps", "first"))
     team_v = per.groupby("run").v.median()
     per["rel"] = per.v / per.index.get_level_values("run").map(team_v)
+    per = touch_expectation(per, ev, keepers)
     # window-to-window spread of a player's relative work rate (0.135 on this game): sets how big a difference
     # between phases, or from the team, has to be before it is a tip rather than noise
     solid = per[per.n >= SOLID_WINDOW_S * per.fps]  # a few seconds in a window give a wild ratio
@@ -155,15 +226,19 @@ def metrics(s: pd.DataFrame, game: dict) -> tuple:
                 ball_seen_min=bv.sum() / fps / 60,
                 near_ball_pct=100 * float((g.ball_dist[bv] <= NEAR_BALL_M).mean()) if bv.any() else np.nan,
                 ball_dist_med=float(g.ball_dist[bv].median()) if bv.any() else np.nan,
+                touches=int(p.touches.sum()),
+                touches_per_min=float(p.touches.sum() / minutes),
+                exp_touch=float(p.exp_touch.sum()),
+                touch_rel=float(p.touches.sum() / p.exp_touch.sum()) if p.exp_touch.sum() > 0 else np.nan,
+                on_ball_pct=float(100 * p.poss_s.sum() / (minutes * 60)),
                 **{f"{k}_min": v[0] for k, v in ph.items()},
                 **{f"{k}_rel": v[1] for k, v in ph.items()},
                 **{f"{k}_k": v[2] for k, v in ph.items()},
             )
         )
     m = pd.DataFrame(rows)
-    roster = pd.read_csv(ROSTER_FILE)
     m = m.merge(roster[["jersey", "name", "goalkeeper"]], on="jersey", how="left")
-    gk = m.goalkeeper.astype(str).str.lower() == "true"
+    gk = m.jersey.isin(keepers)
     # roles by rank of depth vs the team line: the camera shows part of the team, which compresses depth, so a
     # fixed cutoff (+-7 m) made 12 of 19 midfielders. Thirds of the well-seen outfield players set the cut points.
     seen = m[~gk & (m.minutes >= MIN_MINUTES)].depth
@@ -310,6 +385,25 @@ def tips_for(r: pd.Series, outfield: pd.DataFrame) -> list:
                     f"{med.near_ball_pct:.0f}% for {r.role}s",
                 )
             )
+    # touches: count against what teammates' rate in the same windows predicts, scaled to the role's usual ratio
+    expect = r.exp_touch * med.touch_rel if np.isfinite(med.touch_rel) else np.nan
+    if np.isfinite(expect) and expect >= MIN_EXPECTED and np.isfinite(r.touch_rel):
+        gap = r.touch_rel / med.touch_rel - 1
+        ev = (
+            f"{r.touches} touches in {r.minutes:.0f} min seen ({r.touches_per_min:.2f}/min); {r.touch_rel:.2f} x "
+            f"teammates in the same windows vs {med.touch_rel:.2f} for {r.role}s"
+        )
+        if gap <= -TOUCH_DIFF and poisson.cdf(r.touches, expect) < TOUCH_P:
+            out.append(
+                (
+                    "Touches",
+                    "Gets on the ball less often than others in this role. Show for the ball: find space away from "
+                    "a marker and call for it.",
+                    ev,
+                )
+            )
+        elif gap >= TOUCH_DIFF and poisson.sf(r.touches - 1, expect) < TOUCH_P:
+            out.append(("Touches (strength)", "Gets on the ball more often than others in this role.", ev))
     return out
 
 
@@ -329,6 +423,9 @@ def report(r: pd.Series, tips: list, n_windows: int) -> str:
         f"from the centre line; ranges over {r.roam:.0f} m of pitch length",
         f"- Near the ball (within {NEAR_BALL_M:.0f} m): {r.near_ball_pct:.0f}% of the {r.ball_seen_min:.1f} min "
         "when the ball was detected",
+        f"- Touches (gaining the ball): {r.touches} ({r.touches_per_min:.2f} per visible minute), "
+        f"{r.touch_rel:.2f} x identified teammates in the same windows; on the ball {r.on_ball_pct:.1f}% of visible "
+        "time. events.py finds about 6 in 10 real touches, fewer where the ball detector struggles",
         "",
         "## Observations",
     ]
@@ -343,64 +440,179 @@ def report(r: pd.Series, tips: list, n_windows: int) -> str:
         lines.append(f"- **{kind}.** {text} _({ev})_")
     lines += [
         "",
-        "_Unverified automatic analysis of movement only (no passing, shooting or technique). Check "
+        "_Unverified automatic analysis of movement and touches only (no passing, shooting or technique). Check "
         "observations against video before acting on them._",
         "",
     ]
     return "\n".join(lines)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--runs", required=True, help="comma list of window folders with identity")
-    args = ap.parse_args()
-    runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
-    games = {game_dir(r) for r in runs}
-    if len(games) != 1:
-        raise SystemExit("--runs must be windows of one game (one folder): tips compare players within a game")
-    game = json.loads(game_file(runs[0], GAME_FILE).read_text())
-    cam = json.loads(game_file(runs[0], PITCH_CAMERA).read_text())
-    out = game_dir(runs[0]) / "coaching"
-    length, width = cam["length_m"], cam["touchline_near_y"] - cam["touchline_far_y"]
-    s = pd.concat([window_samples(r, game, length) for r in runs], ignore_index=True)
-    m = metrics(s, game)
+def name_of(r: pd.Series) -> str:
+    return r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
+
+
+def player_tips(m: pd.DataFrame) -> dict:
+    """jersey -> (tips, peer median) for every player; keepers get numbers only (no peers to compare with)."""
+    outfield = m[m.role != "goalkeeper"]
+    out = {}
+    for _, r in m.iterrows():
+        if r.role == "goalkeeper":
+            out[r.jersey] = ([], pd.Series(dtype=float, index=m.columns).astype(float))
+        else:
+            out[r.jersey] = (tips_for(r, outfield), peer_median(r, outfield))
+    return out
+
+
+def single_game(g: dict) -> None:
+    """The one-game pages in <game folder>/coaching/."""
+    out = g["folder"] / "coaching"
+    s, runs = g["s"], g["runs"]
+    m = metrics(s, g["ev"])
     out.mkdir(parents=True, exist_ok=True)
     m.round(3).to_csv(out / "player_metrics.csv", index=False)
-    outfield = m[m.role != "goalkeeper"]
     lines = [
         "# Team overview",
         "",
         f"{len(runs)} windows, {len(m)} players, {m.minutes.sum():.0f} identified "
-        "player-minutes. Unverified automatic analysis of movement only.",
+        "player-minutes. Unverified automatic analysis of movement and touches.",
         "",
-        "| player | role | min | m/min | vs team | fast % | from goal m | depth m | near ball % | observations |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| player | role | min | m/min | vs team | fast % | from goal m | depth m | near ball % | touches/min | "
+        "observations |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    tips_med = player_tips(m)
     tip_counts = {}
     for _, r in m.sort_values("minutes", ascending=False).iterrows():
-        keeper = r.role == "goalkeeper"  # no peers to compare with: numbers only
-        tips = [] if keeper else tips_for(r, outfield)
+        tips, med = tips_med[r.jersey]
         tip_counts[r.jersey] = len(tips)
         (out / f"player_{r.jersey:02d}.md").write_text(report(r, tips, len(runs)), encoding="utf-8")
-        med = pd.Series(dtype=float, index=m.columns).astype(float) if keeper else peer_median(r, outfield)
         page = coaching_html.player_page(
-            r, tips, med, s[s.jersey == r.jersey], length, width, len(runs), confidence(r.minutes)
+            r, tips, med, s[s.jersey == r.jersey], g["length"], g["width"], len(runs), confidence(r.minutes)
         )
         (out / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
-        name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
         lines.append(
-            f"| {name} | {r.role} | {r.minutes:.1f} | {r.m_per_min:.0f} | {r.work_rel:.2f} | "
-            f"{r.pct_fast:.1f} | {r.from_goal:.0f} | {r.depth:+.0f} | {r.near_ball_pct:.0f} | {len(tips)} |"
+            f"| {name_of(r)} | {r.role} | {r.minutes:.1f} | {r.m_per_min:.0f} | {r.work_rel:.2f} | "
+            f"{r.pct_fast:.1f} | {r.from_goal:.0f} | {r.depth:+.0f} | {r.near_ball_pct:.0f} | "
+            f"{r.touches_per_min:.2f} | {len(tips)} |"
         )
     (out / "team_overview.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (out / "index.html").write_text(coaching_html.team_page(m, tip_counts, len(runs)), encoding="utf-8")
     print(f"wrote {len(m)} player pages (.html and .md), index.html, team_overview.md, player_metrics.csv to {out}")
-    print(
-        m[["jersey", "role", "minutes", "work_rel", "pct_fast", "depth", "abs_y", "near_ball_pct"]]
-        .round(2)
-        .sort_values("minutes", ascending=False)
-        .to_string(index=False)
-    )
+    cols = ["jersey", "role", "minutes", "work_rel", "pct_fast", "depth", "near_ball_pct", "touch_rel"]
+    print(m[cols].round(2).sort_values("minutes", ascending=False).to_string(index=False))
+
+
+def topic(kind: str, text: str) -> str:
+    """What a tip is about, without its direction: two tips on one topic with different text point opposite ways."""
+    base = kind.replace(" (strength)", "")
+    if base == "Positioning":
+        if text.startswith("Plays"):
+            return "Positioning depth"
+        return "Positioning width" if text.startswith(("Stays wide", "Stays central")) else "Positioning roam"
+    if base == "Fatigue":
+        return f"Fatigue {text}"  # each fatigue tip is its own comparison, with no opposite
+    return base
+
+
+STATUS = [
+    ("both", "In every game"),
+    ("pooled", "With the games pooled"),
+    ("one", "In one game only"),
+    ("differs", "Differs between games"),
+    ("single", "Only one game seen enough"),
+]
+
+
+def tag_tips(pooled: list, per_game: dict) -> list:
+    """Every observation with where it holds. per_game: label -> tips, for the games the player was seen enough in
+    (MIN_MINUTES). Two games showing one topic in opposite directions make it "differs"."""
+    found = {}  # (kind, text) -> observation
+    for kind, text, ev in pooled:
+        found[(kind, text)] = dict(kind=kind, text=text, evidence=[("Pooled", ev)], games=[], pooled=True)
+    for label, tips in per_game.items():
+        for kind, text, ev in tips:
+            f = found.setdefault((kind, text), dict(kind=kind, text=text, evidence=[], games=[], pooled=False))
+            f["games"].append(label)
+            f["evidence"].append((label, ev))
+    texts = {}  # topic -> the directions games showed
+    for f in found.values():
+        if f["games"]:
+            texts.setdefault(topic(f["kind"], f["text"]), set()).add(f["text"])
+    for f in found.values():
+        if len(texts.get(topic(f["kind"], f["text"]), ())) > 1:
+            f["status"] = "differs"
+        elif len(per_game) < 2:
+            f["status"] = "single"
+        elif len(f["games"]) == len(per_game):
+            f["status"] = "both"
+        elif f["pooled"]:
+            f["status"] = "pooled"
+        else:
+            f["status"] = "one"
+    order = {k: i for i, (k, _) in enumerate(STATUS)}
+    return sorted(found.values(), key=lambda f: (order[f["status"]], f["kind"]))
+
+
+def multi_game(gs: list) -> None:
+    """Pages combining several games in MULTI_OUT: pooled and per-game numbers, observations tagged by game."""
+    gs = sorted(gs, key=lambda g: g["label"])
+    s = pd.concat([g["s"] for g in gs], ignore_index=True)
+    ev = pd.concat([g["ev"] for g in gs], ignore_index=True)
+    m = metrics(s, ev)
+    # each game keeps its own roles: a player moved to another position in one game is compared with that
+    # game's players in the same role, not with the role pooled over games
+    per = {g["label"]: metrics(g["s"], g["ev"]) for g in gs}
+    MULTI_OUT.mkdir(parents=True, exist_ok=True)
+    table = pd.concat([m.assign(scope="pooled")] + [q.assign(scope=k) for k, q in per.items()])
+    table.round(3).to_csv(MULTI_OUT / "player_metrics.csv", index=False)
+    tm = {"Pooled": player_tips(m), **{k: player_tips(q) for k, q in per.items()}}
+    summary, tagged_all = [], {}
+    for _, r in m.sort_values("minutes", ascending=False).iterrows():
+        rows = {k: q.set_index("jersey").loc[r.jersey] for k, q in per.items() if r.jersey in set(q.jersey)}
+        enough = {k: tm[k][r.jersey][0] for k, q in rows.items() if q.minutes >= MIN_MINUTES}
+        keeper = r.role == "goalkeeper"
+        tagged = [] if keeper or r.minutes < MIN_MINUTES else tag_tips(tm["Pooled"][r.jersey][0], enough)
+        tagged_all[r.jersey] = tagged
+        meds = {k: tm[k][r.jersey][1] for k in ["Pooled", *rows]}
+        samples = {g["label"]: (g["s"][g["s"].jersey == r.jersey], g["length"], g["width"]) for g in gs}
+        page = coaching_html.multi_player_page(r, rows, meds, tagged, samples, confidence(r.minutes))
+        (MULTI_OUT / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
+        seen = ", ".join(f"{k}: {q.minutes:.1f} min" for k, q in rows.items())
+        summary += [f"## {name_of(r)} (#{r.jersey}), {r.role}", f"{seen}; pooled {r.minutes:.1f} min"]
+        for f in tagged:
+            summary.append(f"- [{dict(STATUS)[f['status']]}] **{f['kind']}.** {f['text']}")
+            summary += [f"  - {k}: {e}" for k, e in f["evidence"]]
+        summary.append("")
+    head = [
+        "# Players across games",
+        "",
+        f"{len(gs)} games ({', '.join(g['label'] for g in gs)}), {len(m)} players. Unverified automatic analysis of "
+        "movement and touches. Observations are tagged by where they hold.",
+        "",
+    ]
+    (MULTI_OUT / "team_overview.md").write_text("\n".join(head + summary), encoding="utf-8")
+    page = coaching_html.multi_team_page(m, per, tagged_all, [g["label"] for g in gs])
+    (MULTI_OUT / "index.html").write_text(page, encoding="utf-8")
+    counts = pd.Series([f["status"] for t in tagged_all.values() for f in t], dtype=str).value_counts()
+    print(f"wrote {len(m)} player pages, index.html, team_overview.md, player_metrics.csv to {MULTI_OUT}")
+    print("observations by status:", counts.to_dict())
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--runs", required=True, help="comma list of window folders with identity (one or more games)")
+    args = ap.parse_args()
+    by_game = {}
+    for r in args.runs.split(","):
+        run = require_under_data(Path(r))
+        by_game.setdefault(game_dir(run), []).append(run)
+    gs = [load_game(rs) for rs in by_game.values()]
+    if len({g["label"] for g in gs}) != len(gs):
+        raise SystemExit('two games share a label: give each game.local.json a "video" name with its date')
+    if len(gs) == 1:
+        single_game(gs[0])
+    else:
+        multi_game(gs)
 
 
 if __name__ == "__main__":

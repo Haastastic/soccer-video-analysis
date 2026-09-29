@@ -17,8 +17,9 @@ which goal we defend), pitch_camera.local.json and kit_prototypes.local.json.
             colours change between games (home and away, a new opponent), so the pilot's kit clusters are written
             with a review montage and the command stops for the mapping (team_classify.py assign; one command).
   4. run    Every window of both halves (run_windows.py), then which goal we defend (a vote of where our
-            goalkeeper was found in the first-half windows), identity again with that known, player stats and the
-            coaching pages (data/<game>/coaching/, local only).
+            goalkeeper was found in the first-half windows, cross-checked against which half our players stand in
+            at the second-half kickoff; if they disagree the run stops for the owner), identity again with that
+            known, player stats and the coaching pages (data/<game>/coaching/, local only).
 
 Each step is resumable: rerun it and finished work is skipped. Everything written stays under data/ (git-ignored),
 including the contact sheet: it shows minors.
@@ -295,6 +296,39 @@ def goal_vote(game: str, names: list, g: dict) -> float | None:
     return max(set(votes), key=votes.count)
 
 
+KICKOFF_S, KICKOFF_GAP_M, KICKOFF_AGREE = 30.0, 10.0, 0.7
+
+
+def kickoff_end(game: str, g: dict) -> float | None:
+    """X of the goal we defend in the first half, from the second-half kickoff: each team stands in its own half,
+    so our players' median X against the opponents' in the first KICKOFF_S seconds of the second half says which
+    end we defend then. None if the frames do not show a clear split. On game 2 the goalkeeper vote followed the
+    opponent's keeper and got the end wrong; this check (checked on a still) caught it."""
+    start = g["second_half"][0]
+    name = next((n for n, s in windows(g) if s == start), None)
+    run_dir = game_folder(game) / name if name else None
+    if run_dir is None or not (run_dir / "tracklet_roles.csv").exists():
+        return None
+    length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
+    fps = json.loads((run_dir / "cache" / "meta.json").read_text())["cache_fps"]
+    xy = pd.read_csv(run_dir / "tracklet_pitch_xy.csv.gz", usecols=["ci", "track_id", "X_m"])
+    roles = pd.read_csv(run_dir / "tracklet_roles.csv")
+    d = xy[xy.ci < KICKOFF_S * fps].merge(roles[["track_id", "role", "player_candidate"]], on="track_id")
+    d = d[d.player_candidate.astype(bool) & d.role.isin(["target", "opponent"])]
+    med = d.pivot_table(index="ci", columns="role", values="X_m", aggfunc="median")
+    n = d.pivot_table(index="ci", columns="role", values="X_m", aggfunc="size")
+    if not {"target", "opponent"} <= set(n.columns):
+        return None
+    ok = (n.target >= 4) & (n.opponent >= 4)
+    diff = (med.target - med.opponent)[ok]
+    if len(diff) < fps * 5 or abs(diff.median()) < KICKOFF_GAP_M:
+        return None
+    if max((diff < 0).mean(), (diff > 0).mean()) < KICKOFF_AGREE:
+        return None
+    # ours at low X in the second half: we defend X = 0 then, so the far goal in the first half
+    return float(length) if diff.median() < 0 else 0.0
+
+
 def name_start(g: dict, name: str) -> str:
     return dict(windows(g))[name]
 
@@ -355,9 +389,17 @@ def cmd_run(args) -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         list(pool.map(one, names))
     if g.get("first_half_our_goal_x") is None:
-        x = goal_vote(args.game, [n for n, _ in names], g)
+        x, kick = goal_vote(args.game, [n for n, _ in names], g), kickoff_end(args.game, g)
+        if x is not None and kick is not None and x != kick:
+            raise SystemExit(
+                f"Which goal we defend is unclear: the goalkeeper vote says X = {x:.0f} in the first half, the "
+                f"second-half kickoff says X = {kick:.0f}. Check the contact sheet at the second-half start (which "
+                'side our players stand on), set "first_half_our_goal_x" in game.local.json, and rerun `run`.'
+            )
+        print(f"goal end: goalkeeper vote {x}, second-half kickoff {kick}")
+        x = kick if x is None else x
         if x is None:
-            print("Our goalkeeper was not found in the first half: the goalkeeper end stays per window.")
+            print("Neither our goalkeeper nor the second-half kickoff shows the end: it stays per window.")
         else:
             g["first_half_our_goal_x"] = x
             save_game(args.game, g)
