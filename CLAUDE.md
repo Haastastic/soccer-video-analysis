@@ -553,6 +553,19 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Game 3: keeper 12.1 min, 2.8 m from our goal, 16.5 m behind the team line, 27 m/min, never at 4 m/s (games 1
   and 2: 3.5 to 4.3 m, 15 to 16 m behind, 45 m/min). Identified player-minutes 161 -> 174, 18 players.
 
+## Phase 20: a learned possessor model (experiment, data/_events_exp/exp_learned*.py, 2026-09-30)
+- Per ball-path frame and nearby player (within 3 body heights): distance, rank, gap to the next nearest, ball
+  speed, ball detected and frames since, the player's speed, closeness over the surrounding half second, team;
+  gradient-boosted classifier; the same segment logic and matcher as events.py. Leave-one-window-out on the 5 owner
+  possession windows (111 possessions): possession F1 0.648 (R 64% P 66%) vs the current rules 0.633 (R 68% P
+  59%; their defaults were chosen on these windows); touch 0.633 vs 0.627. A tie. NOT ADOPTED.
+- Learning curve (held-out possession F1 by training windows): 1: 0.634, 2: 0.658, 3: 0.664, 4: 0.648 (sd about
+  0.09). Flat after two windows: more owner event labels would not help.
+- Why, on the owner's labeled possessed frames: 64% have the possessor nearest with the ball within 1 body height
+  (easy for any method); 15% have no ball position at all; 12% have someone else nearer (crowding); 6% a detected
+  ball over 1 body height away (a wrong object, mostly w5340); 3% an untracked possessor. Events are limited by
+  the inputs (ball recall, crowding), not by the rules. Event work stops here unless ball recall improves.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
