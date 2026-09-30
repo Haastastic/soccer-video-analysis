@@ -11,3 +11,8 @@ CLAUDE.local.md
 share/
 *.local.json
 models/
+webapp/_build/
+webapp/_local_bucket/
+webapp/_local_db.json
+webapp/.env*
+.pytest_cache/

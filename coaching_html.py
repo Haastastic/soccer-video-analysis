@@ -11,6 +11,8 @@ their own steps; every mark has a hover tooltip and the numbers are also in a ta
 
 import html
 import math
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -93,6 +95,84 @@ document.querySelectorAll('[data-tip]').forEach(el => {
 
 def esc(x) -> str:
     return html.escape(str(x))
+
+
+@dataclass
+class Web:
+    """How a page is built for the invited-users site (site/app.py). Every builder takes web=None, which keeps the
+    local pages exactly as before. visible: jerseys the viewer may see named (None = all); rows of other players
+    are left out of tables, never out of team totals, medians or the charts' team lines."""
+
+    shell: Callable  # (title, body) -> the whole document: header, navigation, styles, scripts
+    player_url: Callable  # jersey -> href of that player's page
+    back_url: str  # the team page this player page belongs to
+    photo_url: Callable  # jersey -> href of the player's photo, or None
+    visible: set | None = None
+    intro: str = ""  # trusted HTML under a team page's heading (the game's opponent)
+
+    def shows(self, jersey) -> bool:
+        return self.visible is None or int(jersey) in self.visible
+
+
+WEB_CSS = """
+.avatar { width: 64px; height: 88px; border-radius: 10px; object-fit: cover; background: var(--surface-2);
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 600; color: var(--text-2);
+  flex: none; overflow: hidden; }
+.avatar.sm { width: 28px; height: 38px; border-radius: 6px; font-size: 12px; vertical-align: middle;
+  margin-right: 8px; }
+.avatar.lg { width: 120px; height: 164px; border-radius: 14px; font-size: 32px; }
+.who { display: flex; gap: 18px; align-items: center; margin: 8px 0 4px; }
+.who h1 { margin: 0; }
+.filtered { font-size: 13px; color: var(--text-3); margin: 6px 0 0; }
+"""
+
+
+def initials(name: str) -> str:
+    parts = [p for p in str(name).replace("#", "").split() if p]
+    return "".join(p[0] for p in parts[:2]).upper() or "?"
+
+
+def avatar(web: Web, jersey, name: str, size: str = "") -> str:
+    """The player's photo, or their initials on a plain tile when there is none."""
+    url = web.photo_url(int(jersey))
+    cls = f"avatar {size}".strip()
+    if url:
+        return f'<img class="{cls}" src="{esc(url)}" alt="" loading="lazy">'
+    return f'<span class="{cls}" aria-hidden="true">{esc(initials(name))}</span>'
+
+
+PRIVATE = "Private: automatic analysis of {}, with names. Keep on this computer; do not post."
+
+
+def banner(web: Web | None, what: str) -> str:
+    return "" if web else f'<div class="private">{PRIVATE.format(what)}</div>\n'
+
+
+def back_link(web: Web | None) -> str:
+    return f'<p><a href="{esc(web.back_url)}">← Team</a></p>' if web else '<p><a href="index.html">← Team</a></p>'
+
+
+def player_href(web: Web | None, jersey) -> str:
+    return esc(web.player_url(int(jersey))) if web else f"player_{int(jersey):02d}.html"
+
+
+def heading(web: Web | None, jersey, name: str) -> str:
+    h1 = f'<h1>{esc(name)} <span style="color:var(--text-3);font-weight:400">#{jersey}</span></h1>'
+    return f'<div class="who">{avatar(web, jersey, name, "lg")}{h1}</div>' if web else h1
+
+
+def name_cell(web: Web | None, jersey, name: str) -> str:
+    link = f'<a href="{player_href(web, jersey)}">{esc(name)}</a>'
+    return f"{avatar(web, jersey, name, 'sm')}{link}" if web else link
+
+
+def filtered_note(web: Web | None, shown: int, total: int) -> str:
+    if not web or shown == total:
+        return ""
+    return (
+        f'<p class="filtered">Showing the {shown} player{"s" if shown != 1 else ""} you have access to; team '
+        f"numbers include all {total}.</p>"
+    )
 
 
 def page(title: str, body: str) -> str:
@@ -244,6 +324,7 @@ def player_page(
     width: float,
     n_windows: int,
     confidence: str,
+    web: Web | None = None,
 ) -> str:
     name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
     role = r.role
@@ -301,9 +382,8 @@ def player_page(
         for key, label in PHASES
     )
     body = f"""
-<p><a href="index.html">← Team</a></p>
-<div class="private">Private: automatic analysis of a youth game, with names. Keep on this computer; do not post.</div>
-<h1>{esc(name)} <span style="color:var(--text-3);font-weight:400">#{r.jersey}</span></h1>
+{back_link(web)}
+{banner(web, "a youth game")}{heading(web, r.jersey, name)}
 <p class="sub">{esc(role.capitalize())} · first half {r.min_h1:.0f} min, second half {r.min_h2:.0f} min seen</p>
 <h2>At a glance</h2>
 <div class="tiles">{tiles}</div>
@@ -325,30 +405,32 @@ Touches are the ball-event detector's (it finds about 6 in 10). Numbers are per 
 and automatic identity see about a third to a half of each player's time. Check observations on
 video before acting on them.</p>
 """
-    return page(f"{name} coaching", body)
+    return web.shell(name, body) if web else page(f"{name} coaching", body)
 
 
-def team_page(m: pd.DataFrame, tip_counts: dict, n_windows: int) -> str:
+def team_page(m: pd.DataFrame, tip_counts: dict, n_windows: int, web: Web | None = None) -> str:
     rows = []
     order = {"goalkeeper": 0, "defender": 1, "midfielder": 2, "forward": 3}
     m = m.assign(_o=m.role.map(order)).sort_values(["_o", "minutes"], ascending=[True, False])
     for _, r in m.iterrows():
+        if web and not web.shows(r.jersey):
+            continue
         few = r.minutes < 5
         name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
         near = f"{r.near_ball_pct:.0f}" if np.isfinite(r.near_ball_pct) else "–"
         rows.append(
-            f'<tr{" class=few" if few else ""}><td><a href="player_{r.jersey:02d}.html">{esc(name)}</a>'
+            f"<tr{' class=few' if few else ''}><td>{name_cell(web, r.jersey, name)}"
             f'{" <small>little data</small>" if few else ""}</td><td class="n">{r.jersey}</td>'
             f"<td>{esc(r.role)}</td><td class='n'>{r.minutes:.0f}</td><td class='n'>{r.m_per_min:.0f}</td>"
             f"<td class='n'>{r.work_rel:.2f}</td><td class='n'>{r.pct_fast:.1f}</td>"
             f"<td class='n'>{r.from_goal:.0f}</td><td class='n'>{near}</td><td class='n'>{r.touches_per_min:.2f}</td>"
             f"<td class='n'>{tip_counts.get(r.jersey, 0)}</td></tr>"
         )
+    note = filtered_note(web, len(rows), len(m))
     body = f"""
-<div class="private">Private: automatic analysis of a youth game, with names. Keep on this computer; do not post.</div>
-<h1>Team</h1>
+{banner(web, "a youth game")}<h1>Team</h1>{web.intro if web else ""}
 <p class="sub">{n_windows} five-minute windows, {len(m)} players, {m.minutes.sum():.0f} identified player-minutes.
-Players are grouped by role (from how deep they play relative to the team). Click a name for their page.</p>
+Players are grouped by role (from how deep they play relative to the team). Click a name for their page.</p>{note}
 <div class="wrap"><table>
 <tr><th>Player</th><th class="n">#</th><th>Role</th><th class="n">Min seen</th><th class="n">m/min</th>
 <th class="n">× team</th><th class="n">Fast %</th><th class="n">From goal m</th><th class="n">Near ball %</th>
@@ -357,7 +439,7 @@ Players are grouped by role (from how deep they play relative to the team). Clic
 <p class="note">Unverified automatic analysis of movement and touches. "× team" compares distance per minute with
 identified teammates in the same windows. Check observations on video before acting on them.</p>
 """
-    return page("Team coaching", body)
+    return web.shell("Team", body) if web else page("Team coaching", body)
 
 
 # rows of the per-game comparison table: (label, metrics column, format; "signed" = whole metres with a sign)
@@ -389,7 +471,9 @@ def fmt_value(v, fmt: str) -> str:
     return signed(v) if fmt == "signed" else fmt.format(v)
 
 
-def multi_player_page(r: pd.Series, rows: dict, meds: dict, tagged: list, samples: dict, confidence: str) -> str:
+def multi_player_page(
+    r: pd.Series, rows: dict, meds: dict, tagged: list, samples: dict, confidence: str, web: Web | None = None
+) -> str:
     """One player across games. r: pooled metrics; rows: game label -> that game's metrics; meds: "Pooled" and game
     label -> the role's peer median; tagged: observations with status and evidence (coaching_tips.tag_tips);
     samples: game label -> (samples, pitch length, width)."""
@@ -453,9 +537,8 @@ def multi_player_page(r: pd.Series, rows: dict, meds: dict, tagged: list, sample
         heat.append(f"<div><h3>{esc(k)} · {rows[k].minutes:.0f} min</h3>{svg}{legend}</div>")
         phases.append(f"<div><h3>{esc(k)}</h3>{phase_svg(rows[k])}</div>")
     body = f"""
-<p><a href="index.html">← Team</a></p>
-<div class="private">Private: automatic analysis of youth games, with names. Keep on this computer; do not post.</div>
-<h1>{esc(name)} <span style="color:var(--text-3);font-weight:400">#{r.jersey}</span></h1>
+{back_link(web)}
+{banner(web, "youth games")}{heading(web, r.jersey, name)}
 <p class="sub">{esc(role.capitalize())} over all games{roles_note} · seen in {games_seen}</p>
 <div class="tiles">{tiles}</div>
 <h2>Observations</h2>
@@ -480,7 +563,7 @@ Touches are the ball-event detector's (it finds about 6 in 10, fewer where the b
 panning camera and automatic identity see about a third to a half of each player's time. Check observations on
 video before acting.</p>
 """
-    return page(f"{name} across games", body)
+    return web.shell(name, body) if web else page(f"{name} across games", body)
 
 
 SEASON_MIN_MINUTES = 2.0  # a game with less of the player shows "not enough seen"
@@ -577,18 +660,20 @@ def season_rows(per: dict, labels: list) -> list:
     return out
 
 
-def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list) -> str:
+def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list, web: Web | None = None) -> str:
     order = {"goalkeeper": 0, "defender": 1, "midfielder": 2, "forward": 3}
     m = m.assign(_o=m.role.map(order)).sort_values(["_o", "minutes"], ascending=[True, False])
     rows = []
     for _, r in m.iterrows():
+        if web and not web.shows(r.jersey):
+            continue
         few = r.minutes < 5
         name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
         mins = "".join(f"<td class='n'>{per[k].set_index('jersey').minutes.get(r.jersey, 0):.0f}</td>" for k in labels)
         t = tagged.get(r.jersey, [])
         n_every = sum(f["status"] == "every" for f in t)
         rows.append(
-            f'<tr{" class=few" if few else ""}><td><a href="player_{r.jersey:02d}.html">{esc(name)}</a>'
+            f"<tr{' class=few' if few else ''}><td>{name_cell(web, r.jersey, name)}"
             f'{" <small>little data</small>" if few else ""}</td><td class="n">{r.jersey}</td>'
             f"<td>{esc(r.role)}</td>{mins}<td class='n'>{r.work_rel:.2f}</td>"
             f"<td class='n'>{r.pct_fast:.1f}</td><td class='n'>{r.touches_per_min:.2f}</td>"
@@ -609,8 +694,7 @@ def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list) -> s
         for s in season_rows(per, labels)
     )
     body = f"""
-<div class="private">Private: automatic analysis of youth games, with names. Keep on this computer; do not post.</div>
-<h1>Team across games</h1>
+{banner(web, "youth games")}<h1>Team across games</h1>{web.intro if web else ""}
 <p class="sub">{len(labels)} games, {len(m)} players, {m.minutes.sum():.0f} identified player-minutes. Roles from how
 deep each player plays relative to the team, over all games. Click a name for their page.</p>
 <h2>Season</h2>
@@ -620,7 +704,7 @@ with care; the per-player ratios to teammates below cancel both.</p>
 <div class="wrap"><table>
 <tr><th>Game</th><th class="n">Players</th><th class="n">Identified player-min</th><th class="n">Team m/min</th>
 <th class="n">Touches /min</th><th class="n">On the ball %</th></tr>{season}</table></div>
-<h2>Players</h2>
+<h2>Players</h2>{filtered_note(web, len(rows), len(m))}
 <div class="wrap"><table>
 <tr><th>Player</th><th class="n">#</th><th>Role</th>{game_heads}<th class="n">Work × team</th>
 <th class="n">Fast %</th><th class="n">Touches /min</th><th class="n">Touches × team</th>
@@ -630,4 +714,4 @@ with care; the per-player ratios to teammates below cancel both.</p>
 the same windows. An observation "in every game" showed up in each game on its own; the rest need more games before
 they mean much. Check observations on video before acting on them.</p>
 """
-    return page("Team across games", body)
+    return web.shell("Season", body) if web else page("Team across games", body)

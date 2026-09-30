@@ -1,0 +1,3 @@
+# tests of the coaching site (tests/); synthetic data only
+-r webapp/requirements.txt
+pytest
