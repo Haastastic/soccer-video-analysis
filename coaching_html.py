@@ -468,6 +468,10 @@ conditions and ball detection cancel.</p>
 <h2>Where they play</h2>
 <p class="sub">Share of visible time in each part of the pitch, always attacking to the right.</p>
 <div class="duo">{"".join(heat)}</div>
+<h2>Through the season</h2>
+<p class="sub">One point per game, in date order, compared with identified teammates in the same minutes (1.0 = team
+median). The whisker is ±2 standard errors: points whose whiskers overlap are not really different.</p>
+<div class="duo">{season_svg(rows, "work")}{season_svg(rows, "touch")}</div>
 <h2>Work rate through each game</h2>
 <p class="sub">Compared with identified teammates at the same time; the whisker is ±2 standard errors.</p>
 <div class="duo">{"".join(phases)}</div>
@@ -477,6 +481,100 @@ panning camera and automatic identity see about a third to a half of each player
 video before acting.</p>
 """
     return page(f"{name} across games", body)
+
+
+SEASON_MIN_MINUTES = 2.0  # a game with less of the player shows "not enough seen"
+
+
+def season_point(r: pd.Series, kind: str) -> tuple:
+    """(value, +-2 SE) of a player's ratio to teammates in one game. Work rate: the window-to-window spread over the
+    windows behind it; touches: Poisson on the touch count against the teammates' rate."""
+    if kind == "work":
+        k = max(int(r.get("work_k", 0) or 0), 1)
+        return float(r.work_rel), 2 * float(r.rel_sd) / math.sqrt(k)
+    exp = float(r.get("exp_touch", 0) or 0)
+    if exp <= 0:
+        return np.nan, np.nan
+    return float(r.touch_rel), 2 * math.sqrt(max(float(r.touches), 1.0)) / exp
+
+
+def season_svg(rows: dict, kind: str) -> str:
+    """One player's ratio to teammates per game, in date order, +-2 SE whiskers, team median at 1.0."""
+    title = "Work rate × teammates" if kind == "work" else "Touches × teammates"
+    labels = sorted(rows)
+    pts = []
+    for k in labels:
+        r = rows[k]
+        v, s = season_point(r, kind) if r.minutes >= SEASON_MIN_MINUTES else (np.nan, np.nan)
+        pts.append((k, v, s, float(r.minutes)))
+    ok = [(v, s) for _, v, s, _ in pts if np.isfinite(v)]
+    lo = min([1.0] + [v - s for v, s in ok]) - 0.05
+    hi = max([1.0] + [v + s for v, s in ok]) + 0.05
+    W, H, L, R, T, B = 420, 220, 44, 20, 28, 40
+
+    def ypx(v):
+        return T + (hi - v) / (hi - lo) * (H - T - B)
+
+    n = max(len(labels), 1)
+    xs = [L + (i + 0.5) * (W - L - R) / n for i in range(n)]
+    parts = [
+        f'<text x="{L}" y="16" font-size="13" font-weight="600" fill="var(--text-1)">{esc(title)}</text>',
+        f'<line x1="{L}" x2="{W - R}" y1="{ypx(1):.1f}" y2="{ypx(1):.1f}" stroke="var(--ref)" stroke-width="1.5" '
+        'stroke-dasharray="4 4"/>',
+    ]
+    step = 0.1 if hi - lo < 1 else 0.5  # labels show one decimal
+    for gv in np.arange(math.ceil(lo / step) * step, hi, step):
+        parts.append(
+            f'<text x="{L - 6}" y="{ypx(gv) + 4:.1f}" font-size="11" text-anchor="end" fill="var(--text-3)">'
+            f"{gv:.1f}</text>"
+        )
+    line = [(x, ypx(v)) for (_, v, _, _), x in zip(pts, xs, strict=True) if np.isfinite(v)]
+    if len(line) > 1:
+        path = " ".join(f"{x:.1f},{y:.1f}" for x, y in line)
+        parts.append(f'<polyline points="{path}" fill="none" stroke="var(--accent)" stroke-width="1.5" opacity="0.5"/>')
+    for (k, v, s, mins), x in zip(pts, xs, strict=True):
+        parts.append(
+            f'<text x="{x:.1f}" y="{H - 14}" font-size="11" text-anchor="middle" fill="var(--text-2)">{esc(k)}</text>'
+        )
+        if not np.isfinite(v):
+            parts.append(
+                f'<text x="{x:.1f}" y="{ypx(1) + 16:.1f}" font-size="11" text-anchor="middle" '
+                'fill="var(--text-3)">not enough seen</text>'
+            )
+            continue
+        tip = f"{k}: {v:.2f} × teammates (±{s:.2f}; {mins:.0f} min seen)"
+        parts.append(
+            f'<g data-tip="{esc(tip)}"><line x1="{x:.1f}" x2="{x:.1f}" y1="{ypx(min(v + s, hi)):.1f}" '
+            f'y2="{ypx(max(v - s, lo)):.1f}" stroke="var(--accent)" stroke-width="2" opacity="0.55"/>'
+            f'<circle cx="{x:.1f}" cy="{ypx(v):.1f}" r="5" fill="var(--accent)" stroke="var(--surface)" '
+            f'stroke-width="2"/><text x="{x + 9:.1f}" y="{ypx(v) + 4:.1f}" font-size="11" fill="var(--text-1)">'
+            f"{v:.2f}</text></g>"
+        )
+    return (
+        f'<svg class="chart" viewBox="0 0 {W} {H}" role="img" aria-label="{esc(title)} by game">{"".join(parts)}</svg>'
+    )
+
+
+def season_rows(per: dict, labels: list) -> list:
+    """Team numbers per game (aggregates only, no player): what the season table and the shared summary show."""
+    out = []
+    for k in labels:
+        q = per[k]
+        field = q[q.role != "goalkeeper"]
+        mins = float(q.minutes.sum())
+        out.append(
+            dict(
+                game=k,
+                players=int(len(q)),
+                identified_player_minutes=round(mins, 1),
+                team_m_per_min=round(float(np.average(field.m_per_min, weights=field.minutes)), 1)
+                if len(field)
+                else None,
+                touches_per_min=round(float(q.touches.sum() / mins), 3) if mins else None,
+                on_ball_pct=round(float(np.average(q.on_ball_pct, weights=q.minutes)), 2) if mins else None,
+            )
+        )
+    return out
 
 
 def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list) -> str:
@@ -498,11 +596,31 @@ def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list) -> s
             f"<td class='n'>{len(t)}</td></tr>"
         )
     game_heads = "".join(f'<th class="n">Min {esc(k)}</th>' for k in labels)
+
+    def cell(v, fmt):
+        return "–" if v is None else fmt.format(v)
+
+    season = "".join(
+        f"<tr><td>{esc(s['game'])}</td><td class='n'>{s['players']}</td>"
+        f"<td class='n'>{s['identified_player_minutes']:.0f}</td>"
+        f"<td class='n'>{cell(s['team_m_per_min'], '{:.0f}')}</td>"
+        f"<td class='n'>{cell(s['touches_per_min'], '{:.2f}')}</td>"
+        f"<td class='n'>{cell(s['on_ball_pct'], '{:.1f}')}</td></tr>"
+        for s in season_rows(per, labels)
+    )
     body = f"""
 <div class="private">Private: automatic analysis of youth games, with names. Keep on this computer; do not post.</div>
 <h1>Team across games</h1>
 <p class="sub">{len(labels)} games, {len(m)} players, {m.minutes.sum():.0f} identified player-minutes. Roles from how
 deep each player plays relative to the team, over all games. Click a name for their page.</p>
+<h2>Season</h2>
+<p class="sub">Team numbers per game, from identified players' visible minutes. Distance per minute differs between
+games partly through each game's measurement noise (17 to 29 m/min), and touches through ball detection, so compare
+with care; the per-player ratios to teammates below cancel both.</p>
+<div class="wrap"><table>
+<tr><th>Game</th><th class="n">Players</th><th class="n">Identified player-min</th><th class="n">Team m/min</th>
+<th class="n">Touches /min</th><th class="n">On the ball %</th></tr>{season}</table></div>
+<h2>Players</h2>
 <div class="wrap"><table>
 <tr><th>Player</th><th class="n">#</th><th>Role</th>{game_heads}<th class="n">Work × team</th>
 <th class="n">Fast %</th><th class="n">Touches /min</th><th class="n">Touches × team</th>

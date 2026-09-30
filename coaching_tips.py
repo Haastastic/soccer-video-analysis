@@ -553,7 +553,7 @@ def tag_tips(pooled: list, per_game: dict) -> list:
     return sorted(found.values(), key=lambda f: (order[f["status"]], f["kind"]))
 
 
-def multi_game(gs: list) -> None:
+def multi_game(gs: list, share_dir: Path | None = None) -> None:
     """Pages combining several games in MULTI_OUT: pooled and per-game numbers, observations tagged by game."""
     gs = sorted(gs, key=lambda g: g["label"])
     s = pd.concat([g["s"] for g in gs], ignore_index=True)
@@ -596,11 +596,28 @@ def multi_game(gs: list) -> None:
     counts = pd.Series([f["status"] for t in tagged_all.values() for f in t], dtype=str).value_counts()
     print(f"wrote {len(m)} player pages, index.html, team_overview.md, player_metrics.csv to {MULTI_OUT}")
     print("observations by status:", counts.to_dict())
+    if share_dir is not None:
+        write_share(share_dir, per, [g["label"] for g in gs], counts)
+
+
+def write_share(share_dir: Path, per: dict, labels: list, counts: pd.Series) -> None:
+    """Aggregates only (CLAUDE.md ground rules: no names, numbers or images): team numbers per game and how many
+    observations hold in every game. Safe to share outside this computer."""
+    share_dir.mkdir(parents=True, exist_ok=True)
+    out = dict(
+        note="Unverified automatic analysis of youth soccer video: team aggregates only, no players named.",
+        games=coaching_html.season_rows(per, labels),
+        observations_by_status={str(k): int(v) for k, v in counts.items()},
+    )
+    (share_dir / "season_summary.json").write_text(json.dumps(out, indent=2))
+    print(f"wrote {share_dir / 'season_summary.json'} (aggregates only)")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", required=True, help="comma list of window folders with identity (one or more games)")
+    ap.add_argument("--share-dir", type=Path, default=None, help="several games: also write season_summary.json there "
+                    "(team aggregates only, no names or numbers)")  # fmt: skip
     args = ap.parse_args()
     by_game = {}
     for r in args.runs.split(","):
@@ -612,7 +629,7 @@ def main() -> None:
     if len(gs) == 1:
         single_game(gs[0])
     else:
-        multi_game(gs)
+        multi_game(gs, args.share_dir)
 
 
 if __name__ == "__main__":
