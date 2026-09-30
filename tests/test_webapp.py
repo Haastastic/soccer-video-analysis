@@ -299,3 +299,15 @@ def test_requester_emailed_on_decision(site):
     assert "not approved" in sent["no@example.com"]["Subject"]
     for m in sent.values():  # no player names or numbers in either email
         assert not any(n in m.get_content() for n in PLAYERS.values())
+
+
+def test_icons_public(site):
+    for name, mime in [
+        ("favicon.ico", "image/x-icon"),
+        ("icon-192.png", "image/png"),
+        ("apple-touch-icon.png", "image/png"),
+    ]:
+        r = site.client.get(f"/{name}")
+        assert r.status_code == 200 and r.headers["Content-Type"] == mime and len(r.data) > 100, name
+    assert site.client.get("/site.webmanifest").json["icons"][0]["src"] == "/icon-192.png"
+    assert site.client.get("/icon-999.png").status_code == 404  # only the listed icons are served

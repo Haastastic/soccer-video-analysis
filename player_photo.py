@@ -81,9 +81,11 @@ def frame_size(run: Path) -> tuple:
     return (w or 1920), (h or 1080)
 
 
-def window_candidates(run: Path) -> pd.DataFrame:
+def window_candidates(run: Path, jerseys: set | None = None) -> pd.DataFrame:
     xy = pd.read_csv(run / "tracklet_pitch_xy.csv.gz", usecols=["pf", "ci", "track_id", "X_m", "Y_m"])
     ids = identity_rows(run, xy)[["pf", "ci", "track_id", "jersey"]]
+    if jerseys is not None:
+        ids = ids[ids.jersey.isin(jerseys)]
     tr = pd.read_csv(run / "best_tracklets.csv.gz", usecols=["pf", "ci", "track_id", "x1", "y1", "x2", "y2", "conf"])
     fw, fh = frame_size(run)
     c = ids.merge(tr, on=["pf", "ci", "track_id"])
@@ -117,12 +119,15 @@ def portrait(img: np.ndarray, x1: float, y1: float, x2: float, y2: float) -> np.
 
 def cmd_candidates(args) -> None:
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
+    jerseys = {int(j) for j in args.jerseys.split(",")} if args.jerseys else None
     parts = []
     for run in runs:
-        c = window_candidates(run)
+        c = window_candidates(run, jerseys)
         print(f"{run.name}: {len(c)} clear detections of {c.jersey.nunique() if len(c) else 0} players")
         parts.append(c)
     c = pd.concat(parts, ignore_index=True)
+    if not len(c):
+        raise SystemExit("No clear detections of these players in these windows.")
     # round-robin over windows, best first: light and framing differ between windows and games
     c["rank"] = c.sort_values("score", ascending=False).groupby(["jersey", "run"]).cumcount()
     c = c.sort_values(["rank", "score"], ascending=[True, False]).groupby("jersey").head(args.per_player)
@@ -255,6 +260,7 @@ def main() -> None:
     c = sub.add_parser("candidates", help="find and crop the clearest detections of every identified player")
     c.add_argument("--runs", required=True, help="comma list of windows with identity")
     c.add_argument("--per-player", type=int, default=CANDIDATES_PER_PLAYER, help="candidate crops per player")
+    c.add_argument("--jerseys", default="", help="comma list: only these players (e.g. new ones without a photo)")
     c.set_defaults(fn=cmd_candidates)
     lab = sub.add_parser("label", help="choose one photo per player")
     lab.add_argument("--redo", action="store_true", help="show players that already have a choice too")
