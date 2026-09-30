@@ -279,3 +279,23 @@ def test_privacy_public_and_health(site):
     assert r.status_code == 200 and "Removal" in r.get_data(as_text=True)
     assert not any(n in r.get_data(as_text=True) for n in PLAYERS.values())
     assert site.client.get("/health").status_code == 200
+
+
+def test_requester_emailed_on_decision(site):
+    site.login(ADMIN)
+    site.client.post("/logout", data={"csrf": site.csrf()})
+    for who in ["yes@example.com", "no@example.com"]:
+        site.login(who)
+        site.post("/request", {"role": "parent", "players": "Alder"})
+        site.client.post("/logout", data={"csrf": site.csrf()})
+    site.login(ADMIN)
+    site.mail.clear()
+    for r in site.db.list_requests(status="pending"):
+        decision = "approve" if r["email"] == "yes@example.com" else "deny"
+        site.post(f"/admin/requests/{r['id']}", {"decision": decision, "role": "parent", "players": ["2"]})
+    sent = {m["To"]: m for m in site.mail}
+    assert set(sent) == {"yes@example.com", "no@example.com"}
+    assert "approved" in sent["yes@example.com"]["Subject"] and "/login" in sent["yes@example.com"].get_content()
+    assert "not approved" in sent["no@example.com"]["Subject"]
+    for m in sent.values():  # no player names or numbers in either email
+        assert not any(n in m.get_content() for n in PLAYERS.values())

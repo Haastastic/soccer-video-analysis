@@ -3,7 +3,7 @@
 The coaching pages (coaching_tips.py) for invited Google accounts, on Google Cloud Run.
 
 - **Roles.** An admin sees everything and manages people. A coach sees every player. A parent sees team numbers and only the players an admin ticked for them.
-- **Signing in.** Any Google account can sign in, but an account that is not a user yet only sees a "Request access" form. Each request notifies the admins: an in-app count, plus an email when SMTP is set up.
+- **Signing in.** Any Google account can sign in, but an account that is not a user yet only sees a "Request access" form. Each request notifies the admins: an in-app count, plus an email when SMTP is set up. When an admin approves or denies a request, the requester gets an email saying which.
 - **First admin.** `ADMIN_EMAIL` becomes the first admin the first time that account signs in, as long as no admin exists yet.
 - **Where things are stored.** Pages are rendered per request from data in a private bucket. Users, requests, the school and opponent names, and the logos live in Firestore. No names, logos or photos are in git.
 
@@ -101,5 +101,5 @@ pytest -q tests                      # synthetic players only
 - **Sessions.** Sessions are signed cookies: `__Host-`, Secure, HttpOnly, SameSite=Lax, 12 hours. The user record is re-read on every request, so switching someone off takes effect at once.
 - **Requests.** Every form has a CSRF token. Pages send a CSP with script nonces, `noindex` and `no-store`.
 - **Images.** Photos and logos are only served after a permission check, never from public URLs. Uploaded logos are re-encoded as small PNGs.
-- **Access requests.** At most one request can be waiting per account, and at most 3 requests per day. The email to admins carries only the requester's address and a link.
+- **Access requests.** At most one request can be waiting per account, and at most 3 requests per day. The emails carry only an address, the outcome and a link, never player names or stats.
 - **Audit.** Every admin change and every request is written to the Firestore `audit` collection.
