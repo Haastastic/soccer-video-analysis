@@ -332,6 +332,51 @@ def known_goal_end(run: Path, length: float) -> float | None:
     return (length - first if first < length / 2 else 0.0) if second_half else first
 
 
+# Without a goalkeeper kit class (game 3: the keeper's kit fell in with the opponents'), the goalkeeper is found by
+# place and behaviour over EVERY tracklet (identity's samples hold only target/goalkeeper ones): not classed as ours
+# or an official, on the pitch, within GKP_BOX_M of our goal line and inside the box's width for GKP_SHARE of its
+# samples, X spread (p90 - p10) under GKP_SPREAD_M, GKP_MIN_SAMPLES or more samples; one per moment (the closest to
+# our goal line). Game 1's owner windows, counting every pick on an opponent/other tracklet as wrong: 94% right,
+# 62% of the goalkeeper's time found (exp13b.py; looser settings found 82% at 82 to 87% right).
+GKP_BOX_M, GKP_HALF_WIDTH_M, GKP_SHARE, GKP_SPREAD_M, GKP_MIN_SAMPLES = 11.0, 20.16, 0.6, 6.0, 40
+
+
+def has_keeper_kit(run: Path) -> bool:
+    """Whether this window's game has a goalkeeper kit class (team_classify.py assign mapped one)."""
+    from team_classify import proto_file
+
+    path = proto_file(run)
+    return path.exists() and len(json.loads(path.read_text())["roles"].get("goalkeeper", [])) > 0
+
+
+def goalkeeper_by_position(run: Path) -> pd.DataFrame:
+    """(track_id, ci) samples of any tracklet taken to be our goalkeeper by place and behaviour (see GKP_*); empty
+    without a known goal end."""
+    rows = pd.read_csv(run / "tracklet_pitch_xy.csv.gz", usecols=["ci", "track_id", "X_m", "Y_m"])
+    rows = rows[rows.ci % SAMPLE_CI == 0].reset_index(drop=True)
+    length = json.loads(game_file(run, PITCH_CAMERA).read_text())["length_m"]
+    end = known_goal_end(run, length)
+    keep = np.zeros(len(rows), bool)
+    if end is None:
+        return rows.iloc[:0][["track_id", "ci"]]
+    roles = pd.read_csv(run / "tracklet_roles.csv").set_index("track_id")
+    role = rows.track_id.map(roles.role).to_numpy()
+    on_pitch = rows.track_id.map(roles.player_candidate).fillna(False).astype(bool).to_numpy()
+    x, y = rows.X_m.to_numpy(), rows.Y_m.to_numpy()
+    inbox = (np.abs(x - end) <= GKP_BOX_M) & (np.abs(y) <= GKP_HALF_WIDTH_M) & on_pitch
+    inbox &= ~np.isin(role, ["target", "official"])
+    t = pd.DataFrame(dict(track=rows.track_id.to_numpy(), inbox=inbox, x=x))
+    agg = t.groupby("track").agg(
+        share=("inbox", "mean"), n=("inbox", "size"), spread=("x", lambda s: s.quantile(0.9) - s.quantile(0.1))
+    )
+    good = agg.index[(agg.share >= GKP_SHARE) & (agg.spread <= GKP_SPREAD_M) & (agg.n >= GKP_MIN_SAMPLES)]
+    idx = np.flatnonzero(inbox & np.isin(rows.track_id.to_numpy(), good))
+    if len(idx):
+        dist = pd.Series(np.abs(x[idx] - end), index=idx)
+        keep[dist.groupby(rows.ci.to_numpy()[idx]).idxmin().to_numpy()] = True
+    return rows.loc[keep, ["track_id", "ci"]]
+
+
 def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: list) -> tuple:
     """(goalkeeper's jersey, per-sample flag) for samples taken to be our goalkeeper."""
     from sklearn.linear_model import LogisticRegression
@@ -342,6 +387,8 @@ def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: li
     if len(keepers) != 1:
         return None, none  # the rule assumes one goalkeeper on the roster
     gk = int(keepers.iloc[0])
+    if not has_keeper_kit(run):
+        return gk, none  # no goalkeeper class: cmd_identify adds goalkeeper_by_position over every tracklet
     t0 = js.clip_mid_min(run)
     X, Y, W = [], [], []
     for src in sources:
@@ -421,7 +468,16 @@ def cmd_identify(args) -> None:
     if (run / "jersey_truth.csv").exists() and not args.force:
         raise SystemExit(f"{run} has owner jersey labels (jersey_truth.csv); pass --force to replace their outputs")
     roster = pd.read_csv(ROSTER_FILE)
-    segs = segments(s).merge(roster[["jersey", "name", "goalkeeper"]], on="jersey", how="left")
+    s_seg = s
+    if not has_keeper_kit(run):  # the goalkeeper by place, from every tracklet; reads and other names win
+        gk = roster[roster.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
+        k = goalkeeper_by_position(run)
+        named = s[s.jersey.notna()]
+        k = k[~k.track_id.isin(named.track_id) & ~k.ci.isin(named[named.jersey == int(gk.iloc[0])].ci)]
+        if len(gk) == 1 and len(k):
+            s_seg = pd.concat([s, k.assign(jersey=float(gk.iloc[0]), agree_reads=0)], ignore_index=True)
+            print(f"{run.name}: goalkeeper by place and behaviour (no goalkeeper kit class): {len(k)} samples")
+    segs = segments(s_seg).merge(roster[["jersey", "name", "goalkeeper"]], on="jersey", how="left")
     segs.insert(4, "player_id", "auto")
     roles = pd.read_csv(run / "tracklet_roles.csv")[["track_id", "role"]]
     pi = roles.assign(player_id="", jersey=np.nan, name="", goalkeeper="")

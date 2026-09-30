@@ -540,6 +540,19 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Three games: 20 players; observations 3 in every game, 6 pooled only, 19 in one game, 6 differ, 4 with one game
   seen enough. Team m/min 82 / 87 / 88 by game (not comparable across games: noise floors differ).
 
+## Phase 19: goalkeeper without a goalkeeper kit class (jersey_auto.py, 2026-09-30)
+- Game 3's kit mapping had no goalkeeper class; its keeper was classed opponent (people "classed opponent" spent
+  1710 s standing in our box). When a game's kit prototypes have no goalkeeper, jersey_auto.py identify now adds
+  the goalkeeper by place and behaviour over every tracklet: not ours or an official, on the pitch, within 11 m of
+  our goal line and inside the box's width for 60%+ of its samples, X spread under 6 m, 40+ samples; one per
+  moment (closest to our goal line); trusted reads and other names win. Games 1 and 2 keep the kit-based rule.
+- A mistake caught on the way: a first test (exp13) looked 96% right, but it ran on identity's samples, which only
+  hold target/goalkeeper tracklets, so opponents were never in it. Retested over every tracklet (exp13b), counting
+  every pick on an opponent/other tracklet as wrong: 94% right, 62% of the goalkeeper's owner-labeled time found
+  (looser settings: 82% found at 82 to 87% right).
+- Game 3: keeper 12.1 min, 2.8 m from our goal, 16.5 m behind the team line, 27 m/min, never at 4 m/s (games 1
+  and 2: 3.5 to 4.3 m, 15 to 16 m behind, 45 m/min). Identified player-minutes 161 -> 174, 18 players.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
