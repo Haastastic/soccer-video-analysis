@@ -500,8 +500,15 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Goal end: the goalkeeper vote had no goalkeeper; the kickoff check found no split because play was already
   under way at 46:40 (the kickoff is just before the first second-half window). Owner answered which side of the
   camera view we defended (right = X 0). Checked: player depth correlates with games 1 and 2 at 0.77 and 0.90
-  (a flipped end gives negative). Possible improvement: start the second half's first window a minute earlier so
-  the kickoff check sees the kickoff.
+  (a flipped end gives negative).
+- FIXED: the kickoff check now uses a probe, a 2-minute clip from 90 s before to 30 s after the confirmed second-half
+  start (data/<game>/_kickoff, processed to roles and pitch positions only, never counted in stats). It looks for a
+  kickoff formation: 2 s bins with 70%+ of our players' detections on one side of halfway and 70%+ of the
+  opponents' on the other, held 6 s or more. Single frames at 80% missed game 2's restart (one misclassified player
+  of four visible). Checked on all three games: game 1 (clipD, 26 s) and game 2 (w4340, 16 s) right; game 3's probe
+  found 38 s just before 46:40 and matched the owner's answer. Open-play windows show such formations too (5 of 6
+  consistent with that half's ends, probably kickoffs after goals; one 10 s first-half case the wrong way round),
+  so the probe stays narrow and a disagreement with the goalkeeper vote still stops the run for the owner.
 - Pitch: the existing camera fixed 100% of the pilot's frames (no refit). Identity 21 to 46% of target samples per
   window (games 1 and 2: 34 to 55%), 17 players, 159 identified player-minutes. Coaching pages
   data/g0916/coaching/; the multi-game view data/coaching_games/ now covers three games (20 players; 3 observations
