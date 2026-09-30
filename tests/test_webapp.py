@@ -272,3 +272,10 @@ def test_safe_next():
     assert safe_next("//evil.example") == "/"
     assert safe_next("https://evil.example") == "/"
     assert safe_next(None) == "/"
+
+
+def test_privacy_public_and_health(site):
+    r = site.client.get("/privacy")
+    assert r.status_code == 200 and "Removal" in r.get_data(as_text=True)
+    assert not any(n in r.get_data(as_text=True) for n in PLAYERS.values())
+    assert site.client.get("/health").status_code == 200

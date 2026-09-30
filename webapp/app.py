@@ -270,7 +270,7 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
         body = (
             '<div class="center"><h1>Coaching</h1>'
             "<p class='sub'>Private coaching pages for invited families and coaches.</p>"
-            f"<p>{google}</p>{dev}</div>"
+            f'<p>{google}</p>{dev}<p class="sub"><a href="/privacy">Privacy</a></p></div>'
         )
         return page("Sign in", body)
 
@@ -305,7 +305,12 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
         session.clear()
         return redirect(url_for("login"))
 
-    @app.get("/healthz")
+    @app.get("/privacy")
+    def privacy():
+        # public: Google's sign-in consent screen links here
+        return page("Privacy", ui.privacy(os.environ.get("CONTACT_EMAIL", "")))
+
+    @app.get("/health")  # Cloud Run reserves paths ending in "z" (/healthz never reaches the app)
     def healthz():
         return "ok", 200, {"Content-Type": "text/plain"}
 
