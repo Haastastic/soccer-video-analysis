@@ -489,6 +489,25 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   misread base identity, not from height. NOT ADOPTED: no setting clears about 95% on every window, and trusted
   identity is 91 to 99.8%. Linking stays shelved; coverage needs more players read at all (Phase 8).
 
+## Phase 16: a third game (data/g0916, 2026-09-30)
+- 90 min video, same venue. The density scan found no halftime break: the opposing varsity team practised on the
+  pitch at halftime, so people counts never dropped. new_game.py plan now writes overview_check.jpg (a frame every
+  2 min) when no break is found, instead of stopping. Owner gave the halves: first 0:00:30-36:00, second from
+  46:40. The play check (our players per frame per minute) put the end at 1:23:00 (5 to 8 before, 0 to 3 after);
+  the two windows after it are in data/g0916/_outside_play/. 14 windows.
+- Kits: owner mapped both pilots (first half: a mixed bench/keeper cluster as other; second half: warm-up
+  tops as other). No goalkeeper kit class, so the goalkeeper got no identity in this game.
+- Goal end: the goalkeeper vote had no goalkeeper; the kickoff check found no split because play was already
+  under way at 46:40 (the kickoff is just before the first second-half window). Owner answered which side of the
+  camera view we defended (right = X 0). Checked: player depth correlates with games 1 and 2 at 0.77 and 0.90
+  (a flipped end gives negative). Possible improvement: start the second half's first window a minute earlier so
+  the kickoff check sees the kickoff.
+- Pitch: the existing camera fixed 100% of the pilot's frames (no refit). Identity 21 to 46% of target samples per
+  window (games 1 and 2: 34 to 55%), 17 players, 159 identified player-minutes. Coaching pages
+  data/g0916/coaching/; the multi-game view data/coaching_games/ now covers three games (20 players; 3 observations
+  hold in every game a player was seen enough in, 8 only pooled, 18 in one game, 4 differ).
+- Owner time: halves (a few minutes on the overview), two kit mappings, one question on the goal end.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)

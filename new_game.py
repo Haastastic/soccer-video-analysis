@@ -87,7 +87,7 @@ def run(cmd: list, log=None) -> None:
 # ------------------------------------------------------------------------------------------------ plan
 
 
-def propose(scan: pd.DataFrame) -> dict:
+def propose(scan: pd.DataFrame) -> dict | None:
     """Halves, halftime and water breaks from the density scan."""
     t = scan.time_s.to_numpy()
     step = float(np.median(np.diff(t)))
@@ -105,8 +105,8 @@ def propose(scan: pd.DataFrame) -> dict:
     breaks = [b for b in breaks if b[0] > first_play]  # before kick-off is not a break
     video_end = t[-1] + step
     middle = [b for b in breaks if 0.3 * video_end < (b[0] + b[1]) / 2 < 0.7 * video_end]
-    if not middle:
-        raise SystemExit("No break near the middle of the video: pass the halves to `confirm` by hand.")
+    if not middle:  # e.g. the camera was paused over halftime (game 3): the owner picks the halves from an overview
+        return None
     half_break = max(middle, key=lambda b: b[1] - b[0])
     h1 = (first_play, half_break[0])
     h2_start = half_break[1]
@@ -145,12 +145,41 @@ def contact_sheet(video: Path, g: dict, dest: Path) -> None:
     cv2.imwrite(str(dest), sheet)
 
 
+OVERVIEW_STEP_S = 120
+
+
+def overview_sheet(video: Path, dest: Path, step_s: float = OVERVIEW_STEP_S) -> None:
+    """A labelled thumbnail every step_s over the whole video (local only: shows minors), for picking the halves
+    by eye when the density scan shows no halftime break."""
+    cap = cv2.VideoCapture(str(video))
+    end = cap.get(cv2.CAP_PROP_FRAME_COUNT) / max(cap.get(cv2.CAP_PROP_FPS), 1)
+    tiles = []
+    for t in np.arange(0, end, step_s):
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ok, f = cap.read()
+        f = cv2.resize(f, (320, 180)) if ok else np.zeros((180, 320, 3), np.uint8)
+        cv2.rectangle(f, (0, 0), (320, 24), (0, 0, 0), -1)
+        cv2.putText(f, hms(t), (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+        tiles.append(f)
+    while len(tiles) % 5:
+        tiles.append(np.zeros((180, 320, 3), np.uint8))
+    cv2.imwrite(str(dest), np.vstack([np.hstack(tiles[i : i + 5]) for i in range(0, len(tiles), 5)]))
+
+
 def cmd_plan(args) -> None:
     folder = game_folder(args.game)
     folder.mkdir(parents=True, exist_ok=True)
     if not (folder / "density_scan.csv").exists():
         run(["scan_density.py", "--video", args.video, "--out", folder])
-    g = dict(video=str(args.video), **propose(pd.read_csv(folder / "density_scan.csv")), confirmed=False)
+    proposal = propose(pd.read_csv(folder / "density_scan.csv"))
+    if proposal is None:
+        save_game(args.game, dict(video=str(args.video), water_breaks=[], confirmed=False))
+        overview_sheet(Path(args.video), folder / "overview_check.jpg")
+        print(f"No break near the middle of the video. Check {folder / 'overview_check.jpg'} (a frame every "
+              f"{OVERVIEW_STEP_S // 60} min, local only) and pass the halves to `confirm --first-half A-B "
+              "--second-half C-D`.")  # fmt: skip
+        return
+    g = dict(video=str(args.video), **proposal, confirmed=False)
     save_game(args.game, g)
     contact_sheet(Path(args.video), g, folder / "live_play_check.jpg")
     print(json.dumps(g, indent=2))
