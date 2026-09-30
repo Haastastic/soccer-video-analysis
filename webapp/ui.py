@@ -44,7 +44,8 @@ input[type=text], input[type=email], select, textarea { font: inherit; font-size
 table.admin td { vertical-align: top; }
 .muted { color: var(--text-3); }
 td:has(> .avatar.sm) { white-space: nowrap; }
-@media (max-width: 640px) { .me { margin-left: 0; width: 100%; } }
+@media (max-width: 640px) { .me { margin-left: 0; width: 100%; }
+  .wrap th, .wrap td { white-space: nowrap; } }
 """
 
 THEME_JS = """

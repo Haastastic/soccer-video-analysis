@@ -599,7 +599,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   simplified play icon for 16-48 px, the full icon for 180-512 px.
 - `new_game.py publish --bucket <bucket>`: every game's windows -> site_export.py -> photo picker for players with no
   photo decision yet -> publish_site.py (asks before upload). One command per new game after `run`.
-- UNVERIFIED: phone width not checked in a browser.
+- Phone width (390 px, Playwright + Edge on the local site): no page-level sideways scroll on any page; tables keep
+  cells on one line and scroll inside their box.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
