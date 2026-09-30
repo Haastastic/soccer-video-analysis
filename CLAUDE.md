@@ -515,6 +515,31 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   hold in every game a player was seen enough in, 8 only pooled, 18 in one game, 4 differ).
 - Owner time: halves (a few minutes on the overview), two kit mappings, one question on the goal end.
 
+## Phase 17: a per-game jersey round (new_game.py numbers, 2026-09-30)
+- jersey_rare_label.py candidates --auto picks the numbers from a game's own reads: pairs of numbers splitting 5+
+  of our tracklets' reads below the 80% agreement share, and numbers read 500+ times with under 10 s identified
+  per 100 reads (other numbers: 20 to 75). At most 4 numbers, 36 crops each, spread over the windows. new_game.py
+  numbers builds them; the owner labels (jersey_rare_label.py label); numbers --apply retrains the reader and
+  redoes that game's identity, stats and pages.
+- Bug found and fixed on the way: with two numbers confusing each other both ways, a read's text mapped to only
+  one screen, so each number's own reads were shown as its partner's.
+- Partner crops (reads of the other number shown as possible misreads) were never the number: 3 of 27 (game 2's
+  late windows), 0 of 48 (game 3). The automatic round shows own reads only; --also stays for manual use.
+- Game 3 round (about 5 min): 72 crops confirmed. The worst number (1231 reads, 47 s identified) rose to 106 s and
+  its conflicting tracklets fell 13 -> 5; the other pair did not change; the game's identified time +1.6%
+  (159 -> 161 player-minutes). Small: optional, worth it when a number is badly under-trusted, not every game.
+
+## Phase 18: season view (coaching_html.py, 2026-09-30)
+- Multi-game player pages: "Through the season", one point per game in date order for work rate and touches
+  relative to teammates, +-2 SE whiskers (work rate: window-to-window spread; touches: Poisson on the count),
+  team median at 1.0. Team page: a season table per game (players, identified player-minutes, team m/min weighted
+  by minutes, touches per minute, on-the-ball share).
+- coaching_tips.py --share-dir <folder> (several games): season_summary.json with those team numbers and the
+  observation counts only (no names, numbers or images), per the sharing rule.
+- Wording is count-neutral ("All games"; status "every" rather than "both") now that there are three games.
+- Three games: 20 players; observations 3 in every game, 6 pooled only, 19 in one game, 6 differ, 4 with one game
+  seen enough. Team m/min 82 / 87 / 88 by game (not comparable across games: noise floors differ).
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)

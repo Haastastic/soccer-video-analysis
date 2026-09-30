@@ -86,9 +86,11 @@ def find_candidates(
     runs: list, rare: list, labeled: list, max_per_number: int = MAX_PER_NUMBER, also: dict | None = None
 ) -> pd.DataFrame:
     """also: number -> other texts whose crops are shown on that number's screen too (misreads of it)."""
-    text_to_number = {str(j): j for j in rare}
+    # a text can serve several screens: with a mutual pair A/B, "B" is B's own read and a misread of A
+    text_to_number = {str(j): [j] for j in rare}
     for j, texts in (also or {}).items():
-        text_to_number.update({str(t): j for t in texts})
+        for t in texts:
+            text_to_number.setdefault(str(t), []).append(j)
     out = []
     for run in runs:
         r = reads_of(run)
@@ -100,7 +102,8 @@ def find_candidates(
         r = r[(r.legibility >= MIN_LEGIBILITY) & r.text.isin(list(text_to_number))].copy()
         if not len(r):
             continue
-        r["number"] = r.text.map(text_to_number).astype(int)
+        r = r.assign(number=r.text.map(text_to_number)).explode("number")
+        r["number"] = r.number.astype(int)
         r["score"] = r.legibility * r.read_conf
         r = r.sort_values("score", ascending=False).drop_duplicates(["ci", "track_id", "number"])
         r = r.groupby(["number", "track_id"]).head(PER_TRACKLET)
@@ -112,15 +115,80 @@ def find_candidates(
     c = pd.concat(out, ignore_index=True).sort_values("score", ascending=False)
     # round-robin over windows (best read of each window first): the best reads alone can all come from one window,
     # and the owner's crops should cover the light and framing of every window searched
-    c["rank"] = c.groupby(["number", "run"]).cumcount()
-    c = c.sort_values(["rank", "score"], ascending=[True, False]).groupby("number").head(max_per_number)
+    # a number's own reads fill the screen; misreads of it (--also) take at most a third: the owner confirmed only 3
+    # of 27 such crops in game 2's late windows, and a screen of them alone (game 3's first try) teaches nothing
+    c["own"] = c.text.astype(str) == c.number.astype(str)
+    c["rank"] = c.groupby(["number", "own", "run"]).cumcount()
+    c = c.sort_values(["rank", "score"], ascending=[True, False])
+    part = c[~c.own].groupby("number").head(max_per_number // 3)
+    n_part = part.groupby("number").size()
+    own = pd.concat(
+        [g.head(max_per_number - int(n_part.get(j, 0))) for j, g in c[c.own].groupby("number")] or [c.iloc[:0]]
+    )
+    c = pd.concat([own, part])
     cols = ["number", "run", "ci", "track_id", "x1", "y1", "x2", "y2", "text", "legibility", "read_conf"]
     return c.sort_values(["number", "run", "ci"])[cols].reset_index(drop=True)
+
+
+CONFLICT_MIN_TRACKS = 5  # a pair of numbers splitting this many of our tracklets' reads is worth confirming
+LOW_TRUST_READS, LOW_TRUST_S_PER_100 = 500, 10.0  # many reads but little identified time: read, rarely trusted
+MAX_AUTO_NUMBERS = 4
+
+
+def conflict_numbers(runs: list) -> tuple:
+    """(numbers, also) worth confirming in these windows, from what blocks trust: pairs of numbers that split our
+    tracklets' reads below jersey_auto's agreement share (the second number read 2+ times and 20%+), and numbers
+    read often but rarely identified. also maps each number to its conflict partners, whose crops are shown on its
+    screen (misreads of it). Game 2's late windows and game 3 both showed one such pair, and one number read
+    1231 times for 46 s of identity."""
+    roster = {str(j) for j in ja.roster_numbers()}
+    pairs, reads, ident = {}, {}, {}
+    for run in runs:
+        roles = pd.read_csv(run / "tracklet_roles.csv")
+        ours = roles[roles.role.isin(["target", "goalkeeper"]) & roles.player_candidate.astype(bool)].track_id
+        r = ja.number_reads(run, ja.READER_FT, ja.PROD_READ_CI)
+        r = r[r.track_id.isin(ours) & (r.legibility >= ja.MIN_LEGIBILITY) & (r.read_conf >= ja.MIN_READ_CONF)]
+        r = r[r.text.astype(str).isin(roster)].assign(num=lambda f: f.text.astype(int))
+        for j, n in r.num.value_counts().items():
+            reads[j] = reads.get(j, 0) + n
+        for _, s in r.groupby("track_id").num:
+            vc = s.value_counts()
+            if len(s) >= 3 and len(vc) > 1 and vc.iloc[1] >= 2 and vc.iloc[1] >= 0.2 * len(s):
+                key = tuple(sorted(int(x) for x in vc.index[:2]))
+                pairs[key] = pairs.get(key, 0) + 1
+        seg = pd.read_csv(run / "identity_segments.csv")
+        for j, secs in ((seg.ci_end - seg.ci_start) / 30).groupby(seg.jersey).sum().items():
+            ident[int(j)] = ident.get(int(j), 0) + secs
+    picked, also = [], {}
+    for (a, b), n in sorted(pairs.items(), key=lambda kv: -kv[1]):
+        if n < CONFLICT_MIN_TRACKS:
+            break
+        for x, y in ((a, b), (b, a)):
+            also.setdefault(x, []).append(str(y))
+            if x not in picked:
+                picked.append(x)
+    for j, n in sorted(reads.items(), key=lambda kv: -kv[1]):
+        if n >= LOW_TRUST_READS and 100 * ident.get(j, 0) / n < LOW_TRUST_S_PER_100 and j not in picked:
+            picked.append(j)
+    picked = picked[:MAX_AUTO_NUMBERS]
+    print("conflicting pairs (tracklets):", {f"{a}/{b}": n for (a, b), n in pairs.items() if n >= CONFLICT_MIN_TRACKS})
+    print("low trust (identified s per 100 reads):",
+          {j: round(100 * ident.get(j, 0) / reads[j]) for j in picked if j in reads})  # fmt: skip
+    return picked, {j: also[j] for j in picked if j in also}
 
 
 def cmd_candidates(args) -> None:
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
     labeled = [require_under_data(Path(r)) for r in args.labeled.split(",")]
+    if args.auto:
+        # own reads only: the partner's reads shown as possible misreads were almost never the number (3 of 27 in
+        # game 2's late windows, 0 of 48 in game 3's round) and cost a third of the owner's time
+        rare, _ = conflict_numbers(runs)
+        args.numbers = ",".join(str(j) for j in rare)
+        args.also = ""
+        if not rare:
+            print("no conflicting or rarely trusted numbers: nothing to confirm")
+            return
     rare = [int(j) for j in args.numbers.split(",")] if args.numbers else rare_numbers(labeled, args.min_crops)
     also = {}
     for item in filter(None, args.also.split(",")):  # "N:T" -> crops read as T shown on N's screen
@@ -287,6 +355,11 @@ def main() -> None:
     c.add_argument("--labeled", required=True, help="comma list of owner-labeled windows (the reader's training)")
     c.add_argument("--min-crops", type=int, default=30, help="a number is rare below this many labeled crops")
     c.add_argument("--max-per-number", type=int, default=MAX_PER_NUMBER, help="candidate crops per number at most")
+    c.add_argument(
+        "--auto",
+        action="store_true",
+        help="pick the numbers from these windows' conflicting and rarely trusted reads (a new game's round)",
+    )
     c.add_argument(
         "--also",
         default="",

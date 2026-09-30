@@ -22,6 +22,11 @@ which goal we defend), pitch_camera.local.json and kit_prototypes.local.json.
             for the owner), identity again with that
             known, player stats and the coaching pages (data/<game>/coaching/, local only).
 
+  5. numbers  The per-game jersey round (about 5 min of the owner's time): candidate crops of numbers whose reads
+            conflict or are rarely trusted in this game, confirmed with jersey_rare_label.py label; then
+            `numbers --apply` retrains the reader and redoes identity, stats and pages (CLAUDE.md Phase 17).
+            Optional: worth it when a number is badly under-trusted (game 3: +1.6% identified time).
+
 Each step is resumable: rerun it and finished work is skipped. Everything written stays under data/ (git-ignored),
 including the contact sheet: it shows minors.
 
@@ -496,6 +501,29 @@ def cmd_run(args) -> None:
         raise SystemExit("Coaching pages need which goal we defend: add first_half_our_goal_x to game.local.json.")
     run(["coaching_tips.py", "--runs", runs])
     print(f"\ndone: coaching pages in {game_folder(args.game) / 'coaching'} (local only)")
+    print(f"Optional (about 5 min of the owner's time): `new_game.py numbers --game {args.game}`")
+
+
+def cmd_numbers(args) -> None:
+    """The per-game jersey round. Without --apply: candidate crops of the numbers whose reads conflict or are
+    rarely trusted in this game (jersey_rare_label.py candidates --auto), for the owner to confirm with
+    jersey_rare_label.py label. With --apply: retrain the reader with every confirmed crop, then identity, stats
+    and coaching pages for this game again. Windows of other games keep their reads until they are rerun."""
+    g = load_game(args.game)
+    runs = [game_folder(args.game) / n for n, _ in windows(g)]
+    joined = ",".join(str(r) for r in runs)
+    if not args.apply:
+        run(["jersey_rare_label.py", "candidates", "--auto", "--max-per-number", "36", "--labeled", LABELED,
+             "--runs", joined])  # fmt: skip
+        print("\nOwner: python jersey_rare_label.py label  (one screen per number: click the crops that clearly show")
+        print(f"it on our players, then Enter). Then: python new_game.py numbers --game {args.game} --apply")
+        return
+    run(["jersey_auto.py", "finetune", "--runs", LABELED])
+    for r in runs:
+        run(["jersey_auto.py", "identify", "--run", r, "--from", LABELED, "--write"])
+    run(["player_stats.py", "--runs", joined])
+    run(["coaching_tips.py", "--runs", joined])
+    print(f"done: identity, stats and coaching pages for {args.game} with the retrained reader")
 
 
 def main() -> None:
@@ -517,6 +545,10 @@ def main() -> None:
     r.add_argument("--game", required=True)
     r.add_argument("--workers", type=int, default=3, help="windows processed at once (GPU memory: about 2 GB each)")
     r.set_defaults(fn=cmd_run)
+    nb = sub.add_parser("numbers", help="the per-game jersey round: confirm crops of conflicting numbers")
+    nb.add_argument("--game", required=True)
+    nb.add_argument("--apply", action="store_true", help="after the owner labeled: retrain the reader, redo the game")
+    nb.set_defaults(fn=cmd_numbers)
     args = ap.parse_args()
     args.fn(args)
 
