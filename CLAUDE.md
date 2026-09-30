@@ -586,8 +586,20 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   site's code for `gcloud run deploy`. Setup steps: webapp/README.md.
 - tests/test_webapp.py (synthetic players): who sees what, CSRF, request flow and limits, mail content, headers,
   logo re-encoding, first admin. CI runs them (webapp-tests.yml).
-- UNVERIFIED: not yet deployed (the owner runs the gcloud setup); the Docker image was not built locally (Docker
-  Desktop was off); phone width not checked in a browser.
+- DEPLOYED 2026-09-30: GCP project coaching-site-dba494 (us-central1, billing on), Cloud Run service `coaching`
+  (URL in webapp/README.md's redeploy command; the image builds on Cloud Build), private bucket
+  coaching-site-dba494-data (uniform access, public access prevented), Firestore, service account coaching-site
+  (bucket read, Firestore, its secrets only). Secrets: site-secret-key, site-google-secret, site-smtp-password
+  (Gmail app password). Google sign-in app published (External, In production; basic scopes need no verification;
+  run.app was accepted as the authorized domain once home page and /privacy links were set). New build projects
+  need roles/run.builder on the compute default service account or `gcloud run deploy --source` fails.
+- Emails: admins on each access request; the requester on approve/deny (PR #96). Only addresses, outcome, link.
+- Cloud Run reserves paths ending in "z": /healthz never reaches the app, so the health route is /health.
+- Icons (webapp/icons) were cut from the owner's icon sheet (a single mockup image, not separate files): the
+  simplified play icon for 16-48 px, the full icon for 180-512 px.
+- `new_game.py publish --bucket <bucket>`: every game's windows -> site_export.py -> photo picker for players with no
+  photo decision yet -> publish_site.py (asks before upload). One command per new game after `run`.
+- UNVERIFIED: phone width not checked in a browser.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
@@ -623,9 +635,10 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
 - Confirm rarely labeled jersey numbers (owner, a few minutes): jersey_rare_label.py candidates --runs <windows> --labeled <owner-labeled windows>, then jersey_rare_label.py label (one screen per number: click the crops that show it, Enter). Writes data/jersey_rare_truth.csv; jersey_auto.py finetune picks it up.
 - Identify players by hand: jersey_label.py label --run <run> [--redo-mixed], then jersey_label.py apply --run <run> (needs roster.csv, tracklet_stitch.csv; writes jersey_truth.csv, jersey_tracklets.csv, player_identity.csv). Stitched players show their tracklets (T1, T2, a yellow bar at each join); click a crop to name just that tracklet, shift+click a crop to split its tracklet where another person starts (parts T1a/T1b, magenta bar; frames around the switch get no identity), then x or Enter finishes the player as "split". apply also writes identity_segments.csv (named parts of split tracklets as ci ranges). --redo-mixed re-opens players marked mixed to name their tracklets.
-- Coaching site (webapp/README.md): site_export.py --runs <all games' windows>; player_photo.py candidates --runs
-  <windows>, then player_photo.py label (owner); publish_site.py --bucket <bucket> (asks first); deploy:
-  python webapp/deploy.py stage, then gcloud run deploy. Tests: pytest -q tests
+- Coaching site (webapp/README.md): after a new game's `run`, `new_game.py publish --bucket coaching-site-dba494-data`
+  (export, photos for new players, upload; asks first). By hand: site_export.py, player_photo.py candidates/label,
+  publish_site.py. Redeploy code: python webapp/deploy.py stage, then gcloud run deploy coaching --source
+  webapp/_build --region us-central1 --project coaching-site-dba494 --quiet (keeps env and secrets). Tests: pytest -q tests
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions

@@ -5,6 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py ./
+COPY icons ./icons
 RUN useradd --create-home site && chown -R site /app
 USER site
 CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 60 "app:create_app()"

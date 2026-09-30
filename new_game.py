@@ -26,6 +26,10 @@ which goal we defend), pitch_camera.local.json and kit_prototypes.local.json.
             conflict or are rarely trusted in this game, confirmed with jersey_rare_label.py label; then
             `numbers --apply` retrains the reader and redoes identity, stats and pages (CLAUDE.md Phase 17).
             Optional: worth it when a number is badly under-trusted (game 3: +1.6% identified time).
+  6. publish  Put every game on the coaching site (webapp/README.md): export the pages' data for all games
+            (site_export.py), offer the photo picker for players who have no photo decision yet (player_photo.py;
+            players already chosen or skipped are left alone), then upload (publish_site.py lists the files and
+            asks first). The bucket comes from --bucket or SITE_BUCKET.
 
 Each step is resumable: rerun it and finished work is skipped. Everything written stays under data/ (git-ignored),
 including the contact sheet: it shows minors.
@@ -35,6 +39,7 @@ Example (PowerShell):
   python new_game.py confirm --game g0922
   python new_game.py setup --game g0922
   python new_game.py run --game g0922
+  python new_game.py publish --bucket <bucket>
 """
 
 import argparse
@@ -526,6 +531,53 @@ def cmd_numbers(args) -> None:
     print(f"done: identity, stats and coaching pages for {args.game} with the retrained reader")
 
 
+def all_windows() -> list:
+    """Every processed window of every game: data/<window> (the first game) and data/<game>/<window>. Folders
+    starting with "_" (experiments, windows outside play, kickoff probes) are not games or windows."""
+    found = []
+    for d in sorted(DATA_DIR.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        if (d / "player_identity.csv").exists() and (d / "player_events.csv").exists():
+            found.append(d)
+        elif (d / "game.local.json").exists():
+            found += [
+                w for w in sorted(d.iterdir())
+                if w.is_dir() and not w.name.startswith("_") and (w / "player_identity.csv").exists()
+                and (w / "player_events.csv").exists()
+            ]  # fmt: skip
+    return found
+
+
+def missing_photos() -> list:
+    """Players on the site (the export) with no photo decision: neither a chosen photo nor "no photo"."""
+    players = pd.read_csv(DATA_DIR / "site_export" / "season" / "metrics.csv").jersey.astype(int)
+    choices = DATA_DIR / "site_photos" / "choices.csv"
+    decided = set(pd.read_csv(choices).jersey.astype(int)) if choices.exists() else set()
+    return sorted(set(players) - decided)
+
+
+def cmd_publish(args) -> None:
+    import os
+
+    bucket = args.bucket or os.environ.get("SITE_BUCKET")
+    if not bucket:
+        raise SystemExit("Give --bucket (or set SITE_BUCKET): the site's private bucket, see webapp/README.md.")
+    runs = ",".join(str(w) for w in all_windows())
+    print(f"{runs.count(',') + 1} windows")
+    run(["site_export.py", "--runs", runs])
+    new = missing_photos()
+    if new and not args.no_photos:
+        print(f"{len(new)} player(s) without a photo decision: {new}. Finding candidate crops...")
+        run(["player_photo.py", "candidates", "--runs", runs, "--jerseys", ",".join(map(str, new))])
+        print("Owner: pick one photo per player in the window (s = no photo, initials instead; q = stop).")
+        run(["player_photo.py", "label"])
+    elif new:
+        print(f"{len(new)} player(s) without a photo decision (shown with initials): {new}")
+    # publish_site.py asks before uploading, so it runs attached to this terminal
+    subprocess.run([sys.executable, "publish_site.py", "--bucket", bucket], check=True, cwd=HERE)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -549,6 +601,10 @@ def main() -> None:
     nb.add_argument("--game", required=True)
     nb.add_argument("--apply", action="store_true", help="after the owner labeled: retrain the reader, redo the game")
     nb.set_defaults(fn=cmd_numbers)
+    pb = sub.add_parser("publish", help="every game to the coaching site: export, photos for new players, upload")
+    pb.add_argument("--bucket", help="the site's private bucket (default: SITE_BUCKET)")
+    pb.add_argument("--no-photos", action="store_true", help="skip the photo picker for new players")
+    pb.set_defaults(fn=cmd_publish)
     args = ap.parse_args()
     args.fn(args)
 

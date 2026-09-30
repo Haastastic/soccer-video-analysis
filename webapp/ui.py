@@ -69,6 +69,8 @@ def document(title: str, body: str, nonce: str, header: str = "", site_name: str
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">'
         f"<title>{esc(title)} · {esc(site_name)}</title>"
+        '<link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="icon" href="/favicon-32.png" type="image/png">'
+        '<link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest">'
         f'<style nonce="{nonce}">{ch.CSS}{ch.WEB_CSS}{SITE_CSS}</style>'
         f'<script nonce="{nonce}">{THEME_JS}</script></head>'
         f"<body>{header}<main>{body}</main>{tooltip}</body></html>"

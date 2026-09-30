@@ -20,6 +20,7 @@ def stage() -> None:
     for f in FILES:
         shutil.copy(HERE / f, BUILD / f)
     shutil.copy(HERE.parent / "coaching_html.py", BUILD / "coaching_html.py")
+    shutil.copytree(HERE / "icons", BUILD / "icons")
     print(f"staged {len(FILES) + 1} files in {BUILD}")
     print(f"next: gcloud run deploy coaching --source {BUILD} ... (see webapp/README.md)")
 

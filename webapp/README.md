@@ -54,6 +54,11 @@ foreach ($s in "site-secret-key", "site-google-secret", "site-smtp-password") {
 
 ## Deploy (and redeploy after code changes)
 
+To redeploy code later without retyping settings, stage and run
+`gcloud run deploy coaching --source webapp/_build --region REGION --quiet`: env vars and secrets stay as they are.
+New projects: if the first `--source` deploy fails with "default service account is missing required IAM
+permissions", grant `roles/run.builder` on the project to `PROJECT_NUMBER-compute@developer.gserviceaccount.com`.
+
 ```powershell
 python webapp/deploy.py stage        # webapp/_build: the site's code + coaching_html.py only, never data/
 gcloud run deploy coaching --source webapp/_build --region REGION --service-account $SA `
@@ -69,6 +74,10 @@ gcloud run deploy coaching --source webapp/_build --region REGION --service-acco
 - **Without email.** Leave out the two `NOTIFY_SMTP_*` and `site-smtp-password` parts to skip email. Pending requests still show as a count on Admin.
 
 ## Publishing data (after each game)
+
+After a new game's `new_game.py run`, one command does all of it: `python new_game.py publish --bucket BUCKET`.
+It exports every game, opens the photo picker only for players who have no photo decision yet, then uploads
+(after asking). By hand:
 
 ```powershell
 gcloud auth application-default login          # once per machine: lets publish_site.py write to the bucket

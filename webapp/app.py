@@ -305,6 +305,25 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
         session.clear()
         return redirect(url_for("login"))
 
+    ICONS = {  # the site's own icon (webapp/icons), public: browsers fetch these before anyone signs in
+        "favicon.ico": "image/x-icon",
+        "favicon-32.png": "image/png",
+        "apple-touch-icon.png": "image/png",
+        "icon-192.png": "image/png",
+        "icon-512.png": "image/png",
+    }
+
+    @app.get("/<any(" + ", ".join(f'"{n}"' for n in ICONS) + "):name>")
+    def icon(name):
+        data = (HERE / "icons" / name).read_bytes()
+        return data, 200, {"Content-Type": ICONS[name], "Cache-Control": "public, max-age=86400"}
+
+    @app.get("/site.webmanifest")
+    def manifest():
+        icons = [{"src": f"/icon-{n}.png", "sizes": f"{n}x{n}", "type": "image/png"} for n in (192, 512)]
+        body = {"name": "Coaching", "short_name": "Coaching", "icons": icons, "display": "browser"}
+        return body, 200, {"Content-Type": "application/manifest+json", "Cache-Control": "public, max-age=86400"}
+
     @app.get("/privacy")
     def privacy():
         # public: Google's sign-in consent screen links here
