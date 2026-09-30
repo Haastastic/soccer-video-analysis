@@ -18,7 +18,8 @@ which goal we defend), pitch_camera.local.json and kit_prototypes.local.json.
             with a review montage and the command stops for the mapping (team_classify.py assign; one command).
   4. run    Every window of both halves (run_windows.py), then which goal we defend (a vote of where our
             goalkeeper was found in the first-half windows, cross-checked against which half our players stand in
-            at the second-half kickoff; if they disagree the run stops for the owner), identity again with that
+            at the second-half kickoff in a 2-minute probe clip around the restart; if they disagree the run stops
+            for the owner), identity again with that
             known, player stats and the coaching pages (data/<game>/coaching/, local only).
 
 Each step is resumable: rerun it and finished work is skipped. Everything written stays under data/ (git-ignored),
@@ -329,37 +330,85 @@ def goal_vote(game: str, names: list, g: dict) -> float | None:
     return max(set(votes), key=votes.count)
 
 
-KICKOFF_S, KICKOFF_GAP_M, KICKOFF_AGREE = 30.0, 10.0, 0.7
+KICKOFF_PROBE_BEFORE_S, KICKOFF_PROBE_AFTER_S = 90, 30  # the probe clip around the confirmed second-half start
+FORMATION_BIN_S, FORMATION_SIDE, FORMATION_MIN_S, FORMATION_GAP_S = 2.0, 0.7, 6.0, 2.0
 
 
-def kickoff_end(game: str, g: dict) -> float | None:
-    """X of the goal we defend in the first half, from the second-half kickoff: each team stands in its own half,
-    so our players' median X against the opponents' in the first KICKOFF_S seconds of the second half says which
-    end we defend then. None if the frames do not show a clear split. On game 2 the goalkeeper vote followed the
-    opponent's keeper and got the end wrong; this check (checked on a still) caught it."""
-    start = g["second_half"][0]
-    name = next((n for n, s in windows(g) if s == start), None)
-    run_dir = game_folder(game) / name if name else None
-    if run_dir is None or not (run_dir / "tracklet_roles.csv").exists():
-        return None
-    length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
+def formation(run_dir: Path, length: float) -> tuple:
+    """(which end we defend in this clip, seconds of formation) from kickoff formations: FORMATION_BIN_S bins where
+    at least FORMATION_SIDE of our players' detections stand on one side of halfway and at least FORMATION_SIDE of
+    the opponents' on the other (4+ of each per frame), held FORMATION_MIN_S or longer (gaps up to FORMATION_GAP_S
+    bridged). Bins, not single frames: one misclassified player among four visible (game 2's restart) drops a frame
+    to 75%. The longest such run
+    decides: 0.0 if we stand at low X (we defend X = 0), else the far goal. (None, 0) without one. Open play rarely
+    splits the teams this cleanly for seconds; a probe of 2 minutes around the restart keeps false hits out."""
     fps = json.loads((run_dir / "cache" / "meta.json").read_text())["cache_fps"]
     xy = pd.read_csv(run_dir / "tracklet_pitch_xy.csv.gz", usecols=["ci", "track_id", "X_m"])
     roles = pd.read_csv(run_dir / "tracklet_roles.csv")
-    d = xy[xy.ci < KICKOFF_S * fps].merge(roles[["track_id", "role", "player_candidate"]], on="track_id")
-    d = d[d.player_candidate.astype(bool) & d.role.isin(["target", "opponent"])]
-    med = d.pivot_table(index="ci", columns="role", values="X_m", aggfunc="median")
-    n = d.pivot_table(index="ci", columns="role", values="X_m", aggfunc="size")
+    d = xy.merge(roles[["track_id", "role", "player_candidate"]], on="track_id")
+    d = d[d.player_candidate.astype(bool) & d.role.isin(["target", "opponent"])].assign(
+        low=lambda f: f.X_m < length / 2
+    )
+    n = d.pivot_table(index="ci", columns="role", values="low", aggfunc="size")
     if not {"target", "opponent"} <= set(n.columns):
-        return None
-    ok = (n.target >= 4) & (n.opponent >= 4)
-    diff = (med.target - med.opponent)[ok]
-    if len(diff) < fps * 5 or abs(diff.median()) < KICKOFF_GAP_M:
-        return None
-    if max((diff < 0).mean(), (diff > 0).mean()) < KICKOFF_AGREE:
-        return None
-    # ours at low X in the second half: we defend X = 0 then, so the far goal in the first half
-    return float(length) if diff.median() < 0 else 0.0
+        return None, 0.0
+    ok = n.index[(n.target >= 4) & (n.opponent >= 4)]
+    d = d[d.ci.isin(ok)].assign(bin=lambda f: (f.ci / fps // FORMATION_BIN_S).astype(int))
+    low = d.pivot_table(index="bin", columns="role", values="low", aggfunc="mean")
+    if not {"target", "opponent"} <= set(low.columns):
+        return None, 0.0
+    ours_low = (low.target >= FORMATION_SIDE) & (low.opponent <= 1 - FORMATION_SIDE)
+    ours_high = (low.target <= 1 - FORMATION_SIDE) & (low.opponent >= FORMATION_SIDE)
+    best = (None, 0.0)
+    for side, mask in ((0.0, ours_low), (float(length), ours_high)):
+        t = np.sort(mask.index[mask.to_numpy()].to_numpy()) * FORMATION_BIN_S
+        if not len(t):
+            continue
+        breaks = np.flatnonzero(np.diff(t) > FORMATION_GAP_S)
+        starts, ends = np.r_[t[0], t[breaks + 1]], np.r_[t[breaks], t[-1]]
+        longest = float((ends - starts).max()) + FORMATION_BIN_S
+        if longest >= FORMATION_MIN_S and longest > best[1]:
+            best = (side, longest)
+    return best
+
+
+def kickoff_probe(video: Path, game: str, g: dict) -> Path:
+    """A 2-minute clip around the confirmed second-half start, processed as far as pitch positions and roles, in
+    data/<game>/_kickoff (not a window: never counted in stats). The confirmed start is when play is seen to
+    resume, and the kickoff can be just before it (game 3: under way at the first second-half window's start)."""
+    start = max(0.0, parse_time(g["second_half"][0]) - KICKOFF_PROBE_BEFORE_S)
+    r = game_folder(game) / "_kickoff"
+    dur = str(KICKOFF_PROBE_BEFORE_S + KICKOFF_PROBE_AFTER_S)
+    for done, cmd in [
+        (r / "ball_path.csv", ["run_all.py", "--video", video, "--start", hms(start), "--duration", dur, "--out", r]),
+        (r / "tracklet_pitch.csv", ["pitch_mask.py", "--run", r]),
+        (r / "tracklet_roles.csv", ["team_classify.py", "classify", "--run", r]),
+        (r / "pitch_anchors_ptz.local.json", ["pitch_ptz.py", "run", "--run", r]),
+        (r / "tracklet_pitch_xy.csv.gz",
+         ["pitch_calibrate.py", "apply", "--run", r, "--anchors", r / "pitch_anchors_ptz.local.json"]),
+    ]:  # fmt: skip
+        if not done.exists():
+            with GPU_SLOTS.get(cmd[0], nullcontext()):
+                run(cmd)
+    return r
+
+
+def kickoff_end(game: str, g: dict, video: Path | None = None) -> float | None:
+    """X of the goal we defend in the first half, from the second-half kickoff formation (each team in its own
+    half). Looks in the kickoff probe (made here when video is given), else the first second-half window. None
+    without a clear formation. Game 2's goalkeeper vote followed the opponent's keeper and got the end wrong; the
+    kickoff, checked on a still, caught it."""
+    length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
+    first = next((n for n, s in windows(g) if s == g["second_half"][0]), None)
+    dirs = [kickoff_probe(video, game, g)] if video is not None else []
+    dirs += [game_folder(game) / first] if first else []
+    for run_dir in dirs:
+        if (run_dir / "tracklet_pitch_xy.csv.gz").exists():
+            side, secs = formation(run_dir, length)
+            if side is not None:
+                print(f"kickoff formation in {run_dir.name}: {secs:.0f} s, we defend X = {side:.0f} in the 2nd half")
+                return float(length) - side  # the other end in the first half
+    return None
 
 
 def name_start(g: dict, name: str) -> str:
@@ -422,7 +471,7 @@ def cmd_run(args) -> None:
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         list(pool.map(one, names))
     if g.get("first_half_our_goal_x") is None:
-        x, kick = goal_vote(args.game, [n for n, _ in names], g), kickoff_end(args.game, g)
+        x, kick = goal_vote(args.game, [n for n, _ in names], g), kickoff_end(args.game, g, video)
         if x is not None and kick is not None and x != kick:
             raise SystemExit(
                 f"Which goal we defend is unclear: the goalkeeper vote says X = {x:.0f} in the first half, the "

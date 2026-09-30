@@ -515,7 +515,7 @@ def topic(kind: str, text: str) -> str:
 
 
 STATUS = [
-    ("both", "In every game"),
+    ("every", "In every game"),
     ("pooled", "With the games pooled"),
     ("one", "In one game only"),
     ("differs", "Differs between games"),
@@ -544,7 +544,7 @@ def tag_tips(pooled: list, per_game: dict) -> list:
         elif len(per_game) < 2:
             f["status"] = "single"
         elif len(f["games"]) == len(per_game):
-            f["status"] = "both"
+            f["status"] = "every"
         elif f["pooled"]:
             f["status"] = "pooled"
         else:
