@@ -7,6 +7,10 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Videos, crops, rosters, and per-player outputs show minors. Keep them local. Never commit data/, roster.csv, *.mp4, *.pt, LOCAL_CONTEXT.md.
 - Never put names, jersey numbers, school or team names, or kit colors in committed files, commit messages, or issues.
 - Reports may be shared only as aggregate numbers (no images, no names). run_all.py --share-dir does this.
+- ONE EXCEPTION (owner decision, 2026-09-30): the coaching site (webapp/, Phase 21). Per-player pages with names and
+  a chosen photo leave this computer only through publish_site.py (allow-listed files) into a private bucket, served
+  by Cloud Run to invited Google accounts (admin / coach / parent-of-listed-players). Consent is the owner's, handled
+  offline. School and opponent names and logos are entered in the site's admin page (Firestore), never in git.
 - Every stage writes its output to disk so any stage can be rerun and scored on its own.
 - Every stat carries a confidence value and a visibility percentage. Low-confidence events go to a review queue.
 - Be direct. Outline format with real detail. No filler.
@@ -566,6 +570,25 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   ball over 1 body height away (a wrong object, mostly w5340); 3% an untracked possessor. Events are limited by
   the inputs (ball recall, crowding), not by the rules. Event work stops here unless ball recall improves.
 
+## Phase 21: the coaching site for invited users (webapp/, 2026-09-30)
+- Owner decisions: Google Cloud Run, Google sign-in, roles admin / coach (all players) / parent (assigned players;
+  team pages keep team totals and name only their players), a photo per player from the video, school logo on team
+  pages, opponent name and logo per game, signed-in strangers can request access (admins notified in the app and by
+  email if SMTP is set).
+- site_export.py writes coaching_tips' page inputs to data/site_export/; the site renders coaching_html.py's
+  builders per request (web= option: shell, links, photos, visible jerseys). Local pages are byte-identical with
+  web=None (checked on game 1 and all three games), and pages rebuilt from the export match the local ones exactly
+  (0 of 42 differ; heatmap samples must stay unrounded, rounding to 1 mm moved cells).
+- player_photo.py: candidates are the tallest confident identified detections, off the frame edge, not overlapping
+  anyone (at most 2 per tracklet, round-robin over windows, 24 per player), 11:16 portrait, Lanczos x4 and mild
+  sharpening; the owner picks one per player (crop grid + ZoomView). About 40 s for 3 windows.
+- publish_site.py uploads a release (allow-list regex) and swaps current.json; webapp/deploy.py stages only the
+  site's code for `gcloud run deploy`. Setup steps: webapp/README.md.
+- tests/test_webapp.py (synthetic players): who sees what, CSRF, request flow and limits, mail content, headers,
+  logo re-encoding, first admin. CI runs them (webapp-tests.yml).
+- UNVERIFIED: not yet deployed (the owner runs the gcloud setup); the Docker image was not built locally (Docker
+  Desktop was off); phone width not checked in a browser.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)
@@ -600,6 +623,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Identify players automatically (no owner labeling): jersey_auto.py identify --run <run> --from <labeled runs> [--write] (dry run by default; on a labeled window it scores against the owner's labels; writes player_identity.csv and identity_segments.csv, every identified stretch a segment). Reader: jersey_auto.py finetune --runs <labeled runs> (models/jersey/parseq_ft_game.pt, git-ignored)
 - Confirm rarely labeled jersey numbers (owner, a few minutes): jersey_rare_label.py candidates --runs <windows> --labeled <owner-labeled windows>, then jersey_rare_label.py label (one screen per number: click the crops that show it, Enter). Writes data/jersey_rare_truth.csv; jersey_auto.py finetune picks it up.
 - Identify players by hand: jersey_label.py label --run <run> [--redo-mixed], then jersey_label.py apply --run <run> (needs roster.csv, tracklet_stitch.csv; writes jersey_truth.csv, jersey_tracklets.csv, player_identity.csv). Stitched players show their tracklets (T1, T2, a yellow bar at each join); click a crop to name just that tracklet, shift+click a crop to split its tracklet where another person starts (parts T1a/T1b, magenta bar; frames around the switch get no identity), then x or Enter finishes the player as "split". apply also writes identity_segments.csv (named parts of split tracklets as ci ranges). --redo-mixed re-opens players marked mixed to name their tracklets.
+- Coaching site (webapp/README.md): site_export.py --runs <all games' windows>; player_photo.py candidates --runs
+  <windows>, then player_photo.py label (owner); publish_site.py --bucket <bucket> (asks first); deploy:
+  python webapp/deploy.py stage, then gcloud run deploy. Tests: pytest -q tests
 - phase1_track.py is the original tracker-in-the-loop script. Superseded, kept for reference.
 
 ## Next actions
