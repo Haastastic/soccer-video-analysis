@@ -48,8 +48,19 @@ from scipy.stats import poisson
 import coaching_html
 from jersey_auto import GAME_FILE, PITCH_CAMERA
 from pitch_calibrate import Calibration
-from player_stats import MAX_SPEED_MPS, ROSTER_FILE, SPEED_BANDS, identity_rows, smooth_steps
-from sv_common import DATA_DIR, Cache, game_dir, game_file, parse_time, require_under_data
+from player_stats import MAX_SPEED_MPS, SPEED_BANDS, identity_rows, smooth_steps
+from sv_common import (
+    DATA_DIR,
+    DEFAULT_TEAM,
+    Cache,
+    game_dir,
+    game_file,
+    grade,
+    parse_time,
+    read_roster,
+    require_under_data,
+    team_of,
+)
 
 NEAR_BALL_M = 10.0  # "near the ball"
 BALL_MATCH_CI = 2  # a ball detection counts for samples within this many cached frames
@@ -62,7 +73,11 @@ MIN_GAP_FAST_PP, MIN_GAP_BALL_PP = 1.5, 5.0  # and at least this many percentage
 # work-rate and fatigue differences must also exceed 2 standard errors from the measured window-to-window spread
 TOUCH_DIFF, TOUCH_P, MIN_EXPECTED = 0.35, 0.025, 5.0  # touches vs the role: relative gap, one-sided Poisson p, and
 # at least this many touches expected (fewer cannot show a difference)
-MULTI_OUT = DATA_DIR / "coaching_games"
+MULTI_OUT = DATA_DIR / "coaching_games"  # the first team's; another team's is coaching_games_<team> (multi_out)
+
+
+def multi_out(team: str) -> Path:
+    return MULTI_OUT if team == DEFAULT_TEAM else DATA_DIR / f"coaching_games_{team}"
 
 
 def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
@@ -131,7 +146,7 @@ def load_game(runs: list) -> dict:
     for d in (s, ev):
         d["run"] = label + "/" + d.run
         d["game"] = label
-    return dict(folder=folder, label=label, runs=runs, length=length, width=width, s=s, ev=ev)
+    return dict(folder=folder, label=label, runs=runs, length=length, width=width, s=s, ev=ev, team=team_of(runs[0]))
 
 
 def phase(t_min: pd.Series, halftime: float, game_end: float) -> pd.Series:
@@ -168,14 +183,15 @@ def touch_expectation(per: pd.DataFrame, ev: pd.DataFrame, keepers: set) -> pd.D
     return per
 
 
-def metrics(s: pd.DataFrame, ev: pd.DataFrame) -> pd.DataFrame:
-    """Per-player metrics. s needs a phase column (load_game)."""
+def metrics(s: pd.DataFrame, ev: pd.DataFrame, team: str = DEFAULT_TEAM) -> pd.DataFrame:
+    """Per-player metrics. s needs a phase column (load_game). The grade (Freshman to Senior) is for the school
+    year of the latest game in s."""
     s = s[s.speed.isna() | (s.speed <= MAX_SPEED_MPS)].copy()
     s["jersey"] = s.jersey.astype(int)
     s["fast"] = s.speed >= SPEED_BANDS["run"][0]
     s["sprint"] = s.speed >= SPEED_BANDS["fast"][0]
-    roster = pd.read_csv(ROSTER_FILE)
-    keepers = set(roster.jersey[roster.goalkeeper.astype(str).str.lower() == "true"].astype(int))
+    roster = read_roster(team)
+    keepers = set(roster.jersey[roster.goalkeeper])
     # relative work rate: this player's mean speed / the median of identified teammates in the same window
     per = s.groupby(["jersey", "run"]).agg(v=("speed", "mean"), n=("speed", "size"), fps=("fps", "first"))
     team_v = per.groupby("run").v.median()
@@ -237,7 +253,10 @@ def metrics(s: pd.DataFrame, ev: pd.DataFrame) -> pd.DataFrame:
             )
         )
     m = pd.DataFrame(rows)
-    m = m.merge(roster[["jersey", "name", "goalkeeper"]], on="jersey", how="left")
+    m = m.merge(roster[["jersey", "name", "goalkeeper", "class_of"]], on="jersey", how="left")
+    when = pd.to_datetime(pd.Series(s.game.unique()), errors="coerce").max() if "game" in s else pd.NaT
+    when = pd.Timestamp.today() if pd.isna(when) else when
+    m["grade"] = [grade(c, when.year, when.month) for c in m.class_of]
     gk = m.jersey.isin(keepers)
     # roles by rank of depth vs the team line: the camera shows part of the team, which compresses depth, so a
     # fixed cutoff (+-7 m) made 12 of 19 midfielders. Thirds of the well-seen outfield players set the cut points.
@@ -467,7 +486,7 @@ def single_game(g: dict) -> None:
     """The one-game pages in <game folder>/coaching/."""
     out = g["folder"] / "coaching"
     s, runs = g["s"], g["runs"]
-    m = metrics(s, g["ev"])
+    m = metrics(s, g["ev"], g["team"])
     out.mkdir(parents=True, exist_ok=True)
     m.round(3).to_csv(out / "player_metrics.csv", index=False)
     lines = [
@@ -554,17 +573,18 @@ def tag_tips(pooled: list, per_game: dict) -> list:
 
 
 def multi_game(gs: list, share_dir: Path | None = None) -> None:
-    """Pages combining several games in MULTI_OUT: pooled and per-game numbers, observations tagged by game."""
+    """Pages combining several games in multi_out(team): pooled and per-game numbers, observations tagged by game."""
     gs = sorted(gs, key=lambda g: g["label"])
+    out = multi_out(gs[0]["team"])
     s = pd.concat([g["s"] for g in gs], ignore_index=True)
     ev = pd.concat([g["ev"] for g in gs], ignore_index=True)
-    m = metrics(s, ev)
+    m = metrics(s, ev, gs[0]["team"])
     # each game keeps its own roles: a player moved to another position in one game is compared with that
     # game's players in the same role, not with the role pooled over games
-    per = {g["label"]: metrics(g["s"], g["ev"]) for g in gs}
-    MULTI_OUT.mkdir(parents=True, exist_ok=True)
+    per = {g["label"]: metrics(g["s"], g["ev"], g["team"]) for g in gs}
+    out.mkdir(parents=True, exist_ok=True)
     table = pd.concat([m.assign(scope="pooled")] + [q.assign(scope=k) for k, q in per.items()])
-    table.round(3).to_csv(MULTI_OUT / "player_metrics.csv", index=False)
+    table.round(3).to_csv(out / "player_metrics.csv", index=False)
     tm = {"Pooled": player_tips(m), **{k: player_tips(q) for k, q in per.items()}}
     summary, tagged_all = [], {}
     for _, r in m.sort_values("minutes", ascending=False).iterrows():
@@ -576,7 +596,7 @@ def multi_game(gs: list, share_dir: Path | None = None) -> None:
         meds = {k: tm[k][r.jersey][1] for k in ["Pooled", *rows]}
         samples = {g["label"]: (g["s"][g["s"].jersey == r.jersey], g["length"], g["width"]) for g in gs}
         page = coaching_html.multi_player_page(r, rows, meds, tagged, samples, confidence(r.minutes))
-        (MULTI_OUT / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
+        (out / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
         seen = ", ".join(f"{k}: {q.minutes:.1f} min" for k, q in rows.items())
         summary += [f"## {name_of(r)} (#{r.jersey}), {r.role}", f"{seen}; pooled {r.minutes:.1f} min"]
         for f in tagged:
@@ -590,11 +610,11 @@ def multi_game(gs: list, share_dir: Path | None = None) -> None:
         "movement and touches. Observations are tagged by where they hold.",
         "",
     ]
-    (MULTI_OUT / "team_overview.md").write_text("\n".join(head + summary), encoding="utf-8")
+    (out / "team_overview.md").write_text("\n".join(head + summary), encoding="utf-8")
     page = coaching_html.multi_team_page(m, per, tagged_all, [g["label"] for g in gs])
-    (MULTI_OUT / "index.html").write_text(page, encoding="utf-8")
+    (out / "index.html").write_text(page, encoding="utf-8")
     counts = pd.Series([f["status"] for t in tagged_all.values() for f in t], dtype=str).value_counts()
-    print(f"wrote {len(m)} player pages, index.html, team_overview.md, player_metrics.csv to {MULTI_OUT}")
+    print(f"wrote {len(m)} player pages, index.html, team_overview.md, player_metrics.csv to {out}")
     print("observations by status:", counts.to_dict())
     if share_dir is not None:
         write_share(share_dir, per, [g["label"] for g in gs], counts)
@@ -626,6 +646,8 @@ def main() -> None:
     gs = [load_game(rs) for rs in by_game.values()]
     if len({g["label"] for g in gs}) != len(gs):
         raise SystemExit('two games share a label: give each game.local.json a "video" name with its date')
+    if len({g["team"] for g in gs}) > 1:
+        raise SystemExit("these windows are from more than one team: run each team's games on their own")
     if len(gs) == 1:
         single_game(gs[0])
     else:

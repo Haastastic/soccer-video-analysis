@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 
 import jersey_auto as ja
-from player_stats import ROSTER_FILE, identity_rows
+from player_stats import identity_rows
 from sv_common import (
     FOOTER_H,
     TILE_H,
@@ -50,7 +50,9 @@ from sv_common import (
     crop_tile,
     grid_cols,
     read_frames,
+    read_roster,
     require_under_data,
+    team_of,
     tile_grid,
 )
 
@@ -66,8 +68,8 @@ TRUTH_COLS = ["run", "ci", "track_id", "x1", "y1", "x2", "y2", "number", "shows_
 
 def rare_numbers(labeled: list, min_crops: int) -> list:
     """Roster numbers (goalkeeper aside) with under min_crops owner-labeled crops across the labeled windows."""
-    roster = pd.read_csv(ROSTER_FILE)
-    field = roster[roster.goalkeeper.astype(str).str.lower() != "true"].jersey.astype(int)
+    roster = read_roster(team_of(labeled[0]))
+    field = roster[~roster.goalkeeper].jersey
     counts = pd.Series(np.concatenate([ja.labeled_patches(r)[1] for r in labeled])).value_counts()
     return sorted(int(j) for j in field if counts.get(j, 0) < min_crops)
 
@@ -141,7 +143,7 @@ def conflict_numbers(runs: list) -> tuple:
     read often but rarely identified. also maps each number to its conflict partners, whose crops are shown on its
     screen (misreads of it). Game 2's late windows and game 3 both showed one such pair, and one number read
     1231 times for 46 s of identity."""
-    roster = {str(j) for j in ja.roster_numbers()}
+    roster = {str(j) for j in ja.roster_numbers(team_of(runs[0]))}
     pairs, reads, ident = {}, {}, {}
     for run in runs:
         roles = pd.read_csv(run / "tracklet_roles.csv")

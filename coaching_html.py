@@ -300,6 +300,12 @@ def phase_svg(r: pd.Series) -> str:
     )
 
 
+def grade_of(r: pd.Series) -> str:
+    """ "Junior · " etc. before the role line; empty without a class year on the roster."""
+    g = r.get("grade", "")
+    return f"{esc(g)} · " if isinstance(g, str) and g else ""
+
+
 def signed(v: float) -> str:
     """Whole metres with a sign, without a "-0"."""
     if not np.isfinite(v):
@@ -384,7 +390,8 @@ def player_page(
     body = f"""
 {back_link(web)}
 {banner(web, "a youth game")}{heading(web, r.jersey, name)}
-<p class="sub">{esc(role.capitalize())} · first half {r.min_h1:.0f} min, second half {r.min_h2:.0f} min seen</p>
+<p class="sub">{grade_of(r)}{esc(role.capitalize())} · first half {r.min_h1:.0f} min, second half {
+        r.min_h2:.0f} min seen</p>
 <h2>At a glance</h2>
 <div class="tiles">{tiles}</div>
 <h2>Observations</h2>
@@ -539,7 +546,7 @@ def multi_player_page(
     body = f"""
 {back_link(web)}
 {banner(web, "youth games")}{heading(web, r.jersey, name)}
-<p class="sub">{esc(role.capitalize())} over all games{roles_note} · seen in {games_seen}</p>
+<p class="sub">{grade_of(r)}{esc(role.capitalize())} over all games{roles_note} · seen in {games_seen}</p>
 <div class="tiles">{tiles}</div>
 <h2>Observations</h2>
 {obs}

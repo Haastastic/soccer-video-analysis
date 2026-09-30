@@ -86,12 +86,13 @@ from sv_common import (
     crop_tile,
     grid_cols,
     read_frames,
+    read_roster,
     require_under_data,
+    team_of,
     tile_grid,
 )
 
 WINDOW = "jersey label"
-ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
 ROSTER_ROLES = ("target", "goalkeeper")  # roster.csv is one team; opponents are never matched against it
 CROP_W, CROP_H = TILE_W, TILE_H
 # Jersey numbers aren't OCR-legible, but ARE sometimes readable by eye (with zoom) when a back-facing frame
@@ -546,7 +547,7 @@ def render(tiles: list, session: "Session", total: int, typed: str, zv: ZoomView
 def cmd_label(args) -> None:
     run = args.run
     truth_path, tracklet_path = run / "jersey_truth.csv", run / "jersey_tracklets.csv"
-    roster = pd.read_csv(ROSTER_FILE)
+    roster = read_roster(team_of(run))
     items = build_items(run)
     if not items:
         raise SystemExit("No stitched target/goalkeeper players found. Run tracklet_stitch.py first.")
@@ -697,7 +698,7 @@ def apply_identity(run: Path, roster: pd.DataFrame) -> tuple:
 
 
 def cmd_apply(args) -> None:
-    roster = pd.read_csv(ROSTER_FILE)
+    roster = read_roster(team_of(args.run))
     out, segs, report = apply_identity(args.run, roster)
     out.to_csv(args.run / "player_identity.csv", index=False)
     segs.to_csv(args.run / "identity_segments.csv", index=False)

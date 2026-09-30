@@ -31,9 +31,10 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from player_stats import ROSTER_FILE, identity_rows
+from player_stats import identity_rows
 from sv_common import (
     DATA_DIR,
+    DEFAULT_TEAM,
     FOOTER_H,
     TILE_H,
     TILE_W,
@@ -42,14 +43,27 @@ from sv_common import (
     cache_stride,
     grid_cols,
     read_frames,
+    read_roster,
     require_under_data,
+    team_of,
     tile_grid,
 )
 
-OUT = DATA_DIR / "site_photos"
+OUT = DATA_DIR / "site_photos"  # the first team's; another team's photos are in site_photos/<team> (set_team)
 CAND_DIR = OUT / "_candidates"
 CANDIDATES = CAND_DIR / "candidates.csv"
 CHOICES = OUT / "choices.csv"
+TEAM = DEFAULT_TEAM
+
+
+def set_team(team: str) -> None:
+    global OUT, CAND_DIR, CANDIDATES, CHOICES, TEAM
+    TEAM = team
+    OUT = DATA_DIR / "site_photos" if team == DEFAULT_TEAM else DATA_DIR / "site_photos" / team
+    CAND_DIR = OUT / "_candidates"
+    CANDIDATES, CHOICES = CAND_DIR / "candidates.csv", OUT / "choices.csv"
+
+
 WINDOW = "player photo"
 HEADER_H = 22
 CANDIDATES_PER_PLAYER, PER_TRACKLET = 24, 2
@@ -119,6 +133,9 @@ def portrait(img: np.ndarray, x1: float, y1: float, x2: float, y2: float) -> np.
 
 def cmd_candidates(args) -> None:
     runs = [require_under_data(Path(r)) for r in args.runs.split(",")]
+    other = [r.name for r in runs if team_of(r) != TEAM]
+    if other:
+        raise SystemExit(f"windows of another team than {TEAM} (pass --team): {other}")
     jerseys = {int(j) for j in args.jerseys.split(",")} if args.jerseys else None
     parts = []
     for run in runs:
@@ -154,8 +171,7 @@ def cmd_candidates(args) -> None:
 
 
 def names() -> dict:
-    roster = pd.read_csv(ROSTER_FILE)
-    return {int(r.jersey): str(r.name) for r in roster.itertuples()}
+    return {int(r.jersey): str(r.name) for r in read_roster(TEAM).itertuples()}
 
 
 def load_choices() -> pd.DataFrame:
@@ -265,7 +281,9 @@ def main() -> None:
     lab = sub.add_parser("label", help="choose one photo per player")
     lab.add_argument("--redo", action="store_true", help="show players that already have a choice too")
     lab.set_defaults(fn=cmd_label)
+    ap.add_argument("--team", default=DEFAULT_TEAM, help="whose photos (default: the first team)")
     args = ap.parse_args()
+    set_team(args.team)
     args.fn(args)
 
 

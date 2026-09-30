@@ -14,6 +14,11 @@ SITE_CSS = """
 nav.main { display: flex; gap: 4px; flex-wrap: wrap; }
 nav.main a { color: var(--text-2); text-decoration: none; padding: 6px 10px; border-radius: 6px; font-size: 14px; }
 nav.main a:hover, nav.main a.on { background: var(--surface); color: var(--text-1); }
+nav.teams { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+nav.teams a { padding: 5px 12px; font-size: 13px; font-weight: 600; color: var(--text-2); text-decoration: none; }
+nav.teams a.on { background: var(--accent); color: #fff; }
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: grid; gap: 8px; }
+legend { font-weight: 600; font-size: 14px; }
 .badge { background: var(--accent); color: #fff; border-radius: 9px; font-size: 11px; padding: 1px 6px;
   margin-left: 4px; font-weight: 600; }
 .me { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-3); }
@@ -87,20 +92,49 @@ def sign_out(email: str, csrf: str) -> str:
     )
 
 
-def header(user: dict | None, email: str | None, team: dict, active: str, csrf: str, pending: int = 0) -> str:
-    """user: the member's record, or None (signed out, or signed in without access: a plain header)."""
-    logo = '<img src="/logo/team" alt="">' if team.get("logo") else ""
-    name = esc(team.get("name") or "Coaching")
+def header(
+    user: dict | None,
+    email: str | None,
+    settings: dict,
+    name: str,
+    team: str | None,
+    teams: list,
+    active: str,
+    csrf: str,
+    pending: int = 0,
+    admin: bool = False,
+) -> str:
+    """user: the member's record, or None (signed out, or signed in without access: a plain header). team: the team
+    whose page this is (None on admin and other site pages); teams: (id, label) of every team the viewer may open,
+    shown as a switch when there is more than one."""
     if not user:
         me = sign_out(email, csrf) if email else ""
         return f'<header class="top"><div class="in"><span class="brand">Coaching</span>{me}</div></header>'
-    links = [("season", "/", "Season"), ("games", "/games", "Games"), ("players", "/players", "Players")]
-    if user["role"] == "admin":
+    base = f"/t/{team}" if team else (f"/t/{teams[0][0]}" if teams else "")
+    logo = f'<img src="/t/{esc(team)}/logo" alt="">' if team and settings.get("logo") else ""
+    links = [
+        ("season", f"{base}/", "Season"),
+        ("games", f"{base}/games", "Games"),
+        ("players", f"{base}/players", "Players"),
+    ]
+    if not base:
+        links = []
+    if admin:
         badge = f'<span class="badge">{pending}</span>' if pending else ""
         links.append(("admin", "/admin", f"Admin{badge}"))
     nav = "".join(f'<a href="{href}"{" class=on" if key == active else ""}>{label}</a>' for key, href, label in links)
+    switch = ""
+    if len(teams) > 1:
+        switch = (
+            '<nav class="teams" aria-label="Team">'
+            + "".join(
+                f'<a href="/t/{esc(t)}/"{" class=on" if t == team else ""}>{esc(label)}</a>' for t, label in teams
+            )
+            + "</nav>"
+        )
+    home = f"{base}/" if base else "/"
     return (
-        f'<header class="top"><div class="in"><a class="brand" href="/">{logo}{name}</a>'
+        f'<header class="top"><div class="in"><a class="brand" href="{home}">{logo}{esc(name)}</a>{switch}'
         f'<nav class="main">{nav}</nav>{sign_out(user["email"], csrf)}</div></header>'
     )
 
