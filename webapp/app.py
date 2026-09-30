@@ -658,6 +658,10 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
         db.update_request(rid, dict(status="approved" if decision == "approve" else "denied",
                                     decided_by=g.user["email"], decided=time.time()))  # fmt: skip
         db.audit(g.user["email"], f"request_{decision}", {"id": rid, "email": r["email"]})
+        try:
+            notify.send_decision_notice(r["email"], decision == "approve", url_for("login", _external=True), send_mail)
+        except Exception as e:  # noqa: BLE001 - the decision is saved; the email is a courtesy
+            app.logger.warning("decision email failed: %s", e)
         return redirect(url_for("admin_requests"))
 
     @app.errorhandler(403)
