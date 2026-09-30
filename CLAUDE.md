@@ -610,7 +610,20 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
-10. RESUME HERE (saved 2026-09-28): two games processed (Phases 9 to 13). Owner's order: (1) DONE (Phase 13):
+11. RESUME HERE (saved 2026-09-30): THREE GAMES processed (data/ = game 1 2026-09-18, data/g0922 = game 2,
+   data/g0916 = game 3), Phases 13 to 20 done, main clean at PR #92. Owner's list after game 3 (per-game jersey
+   round, season view, goalkeeper without a keeper kit, event detection) is finished: the jersey round is optional
+   (small gain), the learned event model tied the rules and more event labels would not help (Phase 20).
+   Current state of the tools:
+   - A new game: new_game.py plan -> confirm (owner: halves; overview_check.jpg if no halftime break shows) ->
+     setup (owner: kit mapping per half) -> run (goal end from the goalkeeper vote and the kickoff probe; stops if
+     they disagree) -> optional numbers (about 5 min). Then coaching_tips.py over all games' windows for
+     data/coaching_games/ (add --share-dir for the aggregate-only season_summary.json).
+   - Coaching pages: per game in <game>/coaching/, all games in data/coaching_games/ (local only, names).
+   Next, owner's call: more games (the main lever: most observations still hold in one game only); ball recall is
+   the only event lever left (15% of labeled possessed frames have no ball position). Open, not pursued: running
+   stats were never checked against a measured distance (a timed, measured run on camera would settle it).
+10. DONE, kept for history (saved 2026-09-28): two games processed (Phases 9 to 13). Owner's order: (1) DONE (Phase 13):
    two-game coaching view with touches, command: coaching_tips.py --runs <game 1 windows>,<game 2 windows>; it
    also found and fixed game 2's flipped ends. (2) DONE (Phase 14): venue ball model, ball path +30 points held
    out, events unchanged; next lever for events is the event rules. (3) DONE (Phase 15): late identity drop
