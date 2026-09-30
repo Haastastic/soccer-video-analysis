@@ -106,3 +106,29 @@ NOTE = (
     '<p class="note">Automatic analysis of youth soccer video, shared privately with invited families and coaches. '
     "Please do not copy or pass on names, photos or numbers.</p>"
 )
+
+
+def privacy(contact: str) -> str:
+    """The public privacy page (linked from Google's sign-in consent screen)."""
+    who = f'<a href="mailto:{esc(contact)}">{esc(contact)}</a>' if contact else "the team's site administrator"
+    return f"""<h1>Privacy</h1>
+<p class="sub">This is a private site run by a volunteer for one youth soccer team's players, families and coaches.
+It is not a commercial service.</p>
+<h2>What the site shows</h2>
+<p>Automatic analysis of game video: how much each player runs, where they play, touches of the ball, observations
+for coaching, and one photo of each player cropped from the game video. Nothing is shown to anyone who has not
+been given access. Coaches see every player; parents and guardians see team totals and only their own child.</p>
+<h2>What we keep about you</h2>
+<ul>
+<li>When you sign in with Google: your email address and name, used only to check what you may see.</li>
+<li>If you ask for access: what you typed in the request and when you sent it.</li>
+<li>A record of changes the administrators make (who was given access, and when).</li>
+<li>One session cookie while you are signed in (12 hours), and your light or dark theme choice in your own
+browser. No advertising, analytics or tracking.</li>
+</ul>
+<h2>Where it is kept and who can see it</h2>
+<p>On Google Cloud in the United States, in private storage that only this site can read. It is never sold or given
+to anyone else; Google hosts it and provides the sign-in.</p>
+<h2>Removal</h2>
+<p>To have your account, a request, or a child's page or photo removed, contact {who}. Removal is done within
+14 days.</p>"""
