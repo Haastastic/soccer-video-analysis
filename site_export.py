@@ -57,7 +57,7 @@ def export(gs: list, out: Path | None = None) -> None:
     if out.exists():
         shutil.rmtree(out)
     (out / "season").mkdir(parents=True)
-    per = {g["label"]: ct.metrics(g["s"], g["ev"], g["team"]) for g in gs}
+    per = {g["label"]: ct.metrics(g["s"], g["ev"], g["team"], g["roster"]) for g in gs}
     tm = {k: ct.player_tips(q) for k, q in per.items()}
     games = []
     for g in gs:
@@ -73,7 +73,7 @@ def export(gs: list, out: Path | None = None) -> None:
         games.append(dict(id=k, label=k, n_windows=len(g["runs"]), length=g["length"], width=g["width"]))
     s = pd.concat([g["s"] for g in gs], ignore_index=True)
     ev = pd.concat([g["ev"] for g in gs], ignore_index=True)
-    m = ct.metrics(s, ev, gs[0]["team"])
+    m = ct.metrics(s, ev, gs[0]["team"], ct.pooled_roster(gs))
     pooled = ct.player_tips(m)
     tagged = {}
     for _, r in m.iterrows():

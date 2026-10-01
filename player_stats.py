@@ -200,7 +200,7 @@ def clip_stats(run: Path) -> tuple:
         s = running_stats(smooth_steps(d, fps), fps, clip_s, err)
         rows.append(dict(clip=run.name, jersey=int(jersey), **s, **event_stats(ev, jersey)))
     stats = pd.DataFrame(rows)
-    roster = read_roster(team_of(run))
+    roster = read_roster(team_of(run), run)
     stats = stats.merge(roster[["jersey", "name"]], on="jersey", how="left")
     report = dict(
         clip=run.name,

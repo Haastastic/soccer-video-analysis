@@ -643,11 +643,28 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   37-64% of target samples identified per window (JV games 34-55%), 204 identified player-minutes (202 in play).
 - Goalkeeper: found by place in only 2 windows. Tracks living in our box at night are classed unknown (16 of 19):
   the keeper's kit matches no mapped cluster and the track breaks into short pieces, under the rule's 40 samples.
+  FIXED in part (owner screenshot: a yellow and black kit): goalkeeper prototypes from the medians of the yellow
+  tracks living in our box (29 of 37 yellow tracks, all classed unknown or other before), one per half, and a track
+  the colours call goalkeeper needs only 8 samples (about 4 s) for the place rule (GKP_MIN_SAMPLES_ROLE; the rule is
+  only used for a team without labeled windows or a game without a keeper kit class, so games 1-3 are unaffected).
+  Keeper identified 1.3 -> 1.9 min, 2 -> 5 windows; the keeper is on camera in our box only about 3.7 min all game.
+- Kit mapping without the owner: jersey reads cannot do it (the fine-tuned reader leans toward our numbers on any
+  shirt, and opponents wear the same low numbers: on the 9/3 pilots opponent clusters read as our numbers 47 to 82%
+  of the time). `new_game.py setup --kits-like <game>` maps clusters by colour against a previous game of the same
+  team in the same kit: near our kit -> target, near its other roles -> that role, else a cluster with 10%+ of the
+  rows -> opponent, else other. Reproduces the owner's 9/3 mapping on both 9/3 pilots.
 - Night pitch fit: 50-99% of 2 s frames fixed per window (daylight 89-100%). A camera refit from this game's fixed
   frames moved the centre 3 cm and changed nothing (62 -> 62, 50 -> 49, 59 -> 60%): the lines are fainter, not
   the camera elsewhere. Rejected frames score a median of about 1300 against the 2000 cut, and wrong locks scored up
   to 1600 in the anchor fit, so lowering the cut is unsafe without night anchors. Gaps are bridged by camera motion;
   the noise floor (21-30 m/min) is within game 1's daylight range (17-29). Left as it is.
+- Rosters per game (owner, 2026-10-01): data/<game>/roster.csv (game 1: data/roster.csv) wins over the team's;
+  sv_common.roster_file / read_roster take the window. Several games pooled (coaching, site) use every game's
+  players, the latest game's entry for a jersey listed twice. The owner's six game rosters: the three JV ones equal
+  the JV roster, the 9/5 and 9/16 Varsity ones the Varsity roster; the 9/3 Varsity screenshot shows the JV list
+  (likely the wrong file: the 9/3 seed round confirmed Varsity-only numbers), so 9/3 keeps the Varsity roster.
+  Players are still keyed by jersey within a team: a number worn by different players in different games would
+  merge them in the season view (not seen so far).
 - Halves corrected after processing: the game file keeps its processed windows ("windows"), and stats and coaching
   count only time inside the halves (sv_common.play_mask; games without halves, the first game, are untouched).
 - Lessons from the run: (1) stopping a run while it cuts clips leaves truncated clip.mp4 files that the next run

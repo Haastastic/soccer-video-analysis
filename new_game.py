@@ -28,7 +28,8 @@ which goal we defend), pitch_camera.local.json and kit_prototypes.local.json.
             Optional: worth it when a number is badly under-trusted (game 3: +1.6% identified time).
             A new team's first game needs it: `numbers --seed` shows every roster number (about 15-20 min), since
             the reader has not seen that team's numbers. Set "team" in game.local.json before `setup` (see
-            sv_common's teams note; the roster goes in data/teams/<team>/roster.csv).
+            sv_common's teams note; the roster goes in data/teams/<team>/roster.csv). A game's own roster (the
+            players listed for that game) goes in data/<game>/roster.csv and wins over the team's.
   6. publish  Put every game on the coaching site (webapp/README.md): export the pages' data for all games
             (site_export.py), offer the photo picker for players who have no photo decision yet (player_photo.py;
             players already chosen or skipped are left alone), then upload (publish_site.py lists the files and
@@ -297,6 +298,37 @@ def pitch_ok(run_dir: Path) -> tuple:
     return pct >= PILOT_FIXED_PCT and gap <= PILOT_MAX_GAP_S, f"{pct:.0f}% of frames fixed, longest gap {gap:.0f} s"
 
 
+# Mapping kits from jersey reads does not work: the reader is fine-tuned on our numbers and leans toward them on any
+# shirt, and opponents wear the same low numbers (9/3 pilots: opponent clusters read as our numbers 47 to 82% of the
+# time). Colour against a previous game of the same team does, when the team wears the same kit (home games).
+KIT_MATCH = 18.0  # Lab distance (torso + legs) under which a cluster is taken to be the reference game's kit
+KIT_TEAM_ROWS = 0.10  # an unmatched cluster with at least this share of the rows, mostly on the pitch, is the opponent
+
+
+def kits_like(pilot: Path, ref_game: str) -> dict:
+    """cluster -> role for a pilot's colour clusters, by the nearest prototype of a previous game of the same team:
+    near our kit -> target, near its other roles -> that role, else a big on-pitch cluster -> opponent, else other."""
+    cl = json.loads((pilot / "kit_clusters.json").read_text())
+    ref = json.loads((game_folder(ref_game) / "kit_prototypes.local.json").read_text())["roles"]
+    protos = [(np.array(c), role) for role, cs in ref.items() for c in cs if role != "opponent"]
+    rows = pd.read_csv(pilot / "best_tracklets.csv.gz", usecols=["track_id"]).track_id.value_counts()
+    lab = pd.Series(cl["labels"], index=cl["track_ids"])
+    total = rows.reindex(lab.index).fillna(0).sum()
+    out = {}
+    for k, c in enumerate(cl["centers"]):
+        d, role = min((float(np.linalg.norm(np.array(c) - pc)), r) for pc, r in protos)
+        members = lab.index[lab == k]
+        share = rows.reindex(members).fillna(0).sum() / max(total, 1)
+        if d <= KIT_MATCH:
+            out[k] = role
+        elif share >= KIT_TEAM_ROWS:
+            out[k] = "opponent"
+        else:
+            out[k] = "other"
+        print(f"  cluster {k}: nearest {role} at {d:.1f}, {100 * share:.0f}% of rows -> {out[k]}")
+    return out
+
+
 def cmd_setup(args) -> None:
     g = load_game(args.game)
     if not g.get("confirmed"):
@@ -319,6 +351,15 @@ def cmd_setup(args) -> None:
         if not mapped:
             if not clusters.exists():
                 run(["team_classify.py", "calibrate", "--run", p])
+            if args.kits_like:  # the owner away: map by colour against a previous game of the same team
+                print(f"kit clusters of {pname} against {args.kits_like}:")
+                m = kits_like(p, args.kits_like)
+                if "target" not in m.values():
+                    raise SystemExit("No cluster is near our kit in that game: map the kits by hand (see the montage).")
+                run(["team_classify.py", "assign", "--run", p, "--map", ",".join(f"{c}:{r}" for c, r in m.items())])
+                g.setdefault("kits_note", []).append(f"{pname}: mapped by colour like {args.kits_like}: {m}")
+                save_game(args.game, g)
+                continue
             raise SystemExit(
                 f"Kit colours ({pname}): look at {p / 'kit_clusters.png'} (local only) and map the clusters:\n"
                 f"  python team_classify.py assign --run {p} --map 0:target,1:opponent,...\n"
@@ -355,7 +396,7 @@ def cmd_setup(args) -> None:
 
 def goal_vote(game: str, names: list, g: dict) -> float | None:
     """X of the goal our goalkeeper defends in the first half: where the goalkeeper stretches sit, by majority."""
-    roster = read_roster(g.get("team", DEFAULT_TEAM))
+    roster = read_roster(g.get("team", DEFAULT_TEAM), game_folder(game) / names[0])
     gk = roster[roster.goalkeeper].jersey
     length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
     half_end = parse_time(g["first_half"][1]) / 60
@@ -584,7 +625,7 @@ def cmd_numbers(args) -> None:
         # a new team's first game: the reader has never seen this team's numbers, so every roster number gets a
         # screen, from the original reader's reads (the fine-tuned one leans towards the first team's numbers)
         run(["jersey_auto.py", "reads", "--runs", joined])
-        numbers = ",".join(str(j) for j in read_roster(g.get("team", DEFAULT_TEAM)).jersey)
+        numbers = ",".join(str(j) for j in read_roster(g.get("team", DEFAULT_TEAM), runs[0]).jersey)
         run(["jersey_rare_label.py", "candidates", "--numbers", numbers, "--max-per-number", "36", "--labeled",
              LABELED, "--runs", joined])  # fmt: skip
     elif not args.apply:
@@ -668,6 +709,12 @@ def main() -> None:
     c.set_defaults(fn=cmd_confirm)
     s = sub.add_parser("setup", help="pilot window: pitch camera and kit colours for this game")
     s.add_argument("--game", required=True)
+    s.add_argument(
+        "--kits-like",
+        default="",
+        help="a previous game of the same team in the same kit: map the colours "
+        "against its kits instead of stopping for the owner (check the montage afterwards)",
+    )
     s.set_defaults(fn=cmd_setup)
     r = sub.add_parser("run", help="every window, which goal we defend, stats and coaching pages")
     r.add_argument("--game", required=True)

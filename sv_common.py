@@ -58,7 +58,8 @@ def game_file(run: Path, name: str) -> Path:
 # ---------------------------------------------------------------- teams
 # A game belongs to one team ("team" in its game.local.json; games without one are the first team, DEFAULT_TEAM).
 # Each team has its own roster: the first team's is roster.csv at the repo root (where it always was), any other
-# team's is data/teams/<team>/roster.csv. Both are git-ignored. Team ids are neutral (jv, varsity): school and team
+# team's is data/teams/<team>/roster.csv. A game may have its own, roster.csv in its game folder (the players listed
+# for that game), which wins over the team's. All are git-ignored. Team ids are neutral (jv, varsity): school and team
 # names never go in committed files.
 DEFAULT_TEAM = "jv"
 ROSTER_COLS = ["jersey", "name", "goalkeeper"]  # plus optional class_of (graduation year) and position
@@ -72,15 +73,18 @@ def team_of(run: Path) -> str:
     return DEFAULT_TEAM
 
 
-def roster_file(team: str = DEFAULT_TEAM) -> Path:
+def roster_file(team: str = DEFAULT_TEAM, run: Path | None = None) -> Path:
+    """The game's roster when run is given and its game folder has one, else the team's."""
+    if run is not None and game_file(run, "roster.csv").exists():
+        return game_file(run, "roster.csv")
     if team == DEFAULT_TEAM:
         return DATA_DIR.parent / "roster.csv"
     return DATA_DIR / "teams" / team / "roster.csv"
 
 
-def read_roster(team: str = DEFAULT_TEAM) -> pd.DataFrame:
-    """The team's roster with jersey as int and goalkeeper as bool."""
-    r = pd.read_csv(roster_file(team))
+def read_roster(team: str = DEFAULT_TEAM, run: Path | None = None) -> pd.DataFrame:
+    """The roster (the game's when run is given and it has one, else the team's), jersey as int, goalkeeper bool."""
+    r = pd.read_csv(roster_file(team, run))
     r["jersey"] = r.jersey.astype(int)
     r["goalkeeper"] = r.goalkeeper.astype(str).str.lower() == "true"
     if "class_of" not in r:

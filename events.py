@@ -66,7 +66,7 @@ def our_goal_x(run: Path, length: float) -> float | None:
             mid_min = (parse_time(meta["clip_start"]) + float(meta["clip_duration"]) / 2) / 60
             first = float(g["first_half_our_goal_x"])
             return (length - first if first < length / 2 else 0.0) if mid_min > g["halftime_min"] else first
-    segs, roster = run / "identity_segments.csv", roster_file(team_of(run))
+    segs, roster = run / "identity_segments.csv", roster_file(team_of(run), run)
     if segs.exists() and roster.exists():
         r = pd.read_csv(roster)
         gk = r[r.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
