@@ -413,7 +413,11 @@ def kickoff_end(game: str, g: dict, video: Path | None = None) -> float | None:
     kickoff, checked on a still, caught it."""
     length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
     first = next((n for n, s in windows(g) if s == g["second_half"][0]), None)
-    dirs = [kickoff_probe(video, game, g)] if video is not None else []
+    try:
+        dirs = [kickoff_probe(video, game, g)] if video is not None else []
+    except subprocess.CalledProcessError as e:  # e.g. no painted lines found in the probe (night game, huddle)
+        print(f"kickoff probe failed ({e.cmd[2] if len(e.cmd) > 2 else e}): no kickoff evidence")
+        return None
     dirs += [game_folder(game) / first] if first else []
     for run_dir in dirs:
         if (run_dir / "tracklet_pitch_xy.csv.gz").exists():

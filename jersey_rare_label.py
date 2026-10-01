@@ -13,7 +13,7 @@ PER_TRACKLET per tracklet and MAX_PER_NUMBER per number, best reads first.
 `label` shows one rare number at a time, all its candidate crops at once (windows in order, then time; the same
 grid and zoom as the other crop tools):
 
-  left click   toggle: this crop shows that number (yellow frame)    a  all    n  none
+  left click   toggle: this crop shows that number (yellow frame)    a  all    n  none of them: save and next
   Enter        save this number and go to the next                   b  back one number    q  save and quit
   mouse wheel  zoom, keeping the point under the cursor    right click  center there    r  reset zoom
   scroll bars  appear when part of the grid is hidden: drag, or click to jump
@@ -274,7 +274,10 @@ def render(tiles: list, marks: set, number: int, index: int, total: int, zv: Zoo
     header = f"{index + 1}/{total}  does the green-boxed player wear #{number}?  marked {len(marks)} of {len(tiles)}"
     top = np.zeros((HEADER_H, zoomed.shape[1], 3), np.uint8)
     cv2.putText(top, header + zv.label(), (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-    keys = "click toggle | a all | n none | Enter save+next | b back | q quit | wheel zoom | right-click pan | r reset"
+    keys = (
+        "click toggle | a all | n none+next | Enter save+next | b back | q quit | wheel zoom | right-click pan "
+        "| r reset"
+    )
     return add_footer(np.vstack([top, zoomed]), keys)
 
 
@@ -326,17 +329,17 @@ def cmd_label(args) -> None:
             marks = session.marks.get(session.idx, set())
             cv2.imshow(WINDOW, render(item_tiles, marks, number, session.idx, len(items), zv))
             key = cv2.waitKey(30) & 0xFF
-            if key in (13, 10):
+            if key in (13, 10):  # zoom and view carry over to the next number (owner rule, 2026-09-28)
                 session.finish()
                 save(session, saved)
-                zv.reset()
             elif key == ord("a"):
                 session.set_all(True)
-            elif key == ord("n"):
+            elif key == ord("n"):  # none of these crops show the number: save that and go on (owner, 2026-10-01)
                 session.set_all(False)
+                session.finish()
+                save(session, saved)
             elif key == ord("b"):
                 session.back()
-                zv.reset()
             elif key == ord("r"):
                 zv.reset()
             elif key == ord("q"):

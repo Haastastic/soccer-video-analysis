@@ -16,3 +16,4 @@ webapp/_local_bucket/
 webapp/_local_db.json
 webapp/.env*
 .pytest_cache/
+videos/
