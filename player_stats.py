@@ -44,7 +44,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sv_common import DATA_DIR, Cache, read_roster, require_under_data, team_of
+from sv_common import DATA_DIR, Cache, play_mask, read_roster, require_under_data, team_of
 
 SMOOTH_S = 2.0  # 1 s left a 33 to 44 m/min noise floor on still people; 2 s: 24 to 34 (see stats_report.json)
 MAX_SPEED_MPS = 10.0  # faster steps are position glitches; they are dropped and counted
@@ -188,11 +188,13 @@ def noise_floor(run: Path, xy: pd.DataFrame, fps: float) -> dict:
 def clip_stats(run: Path) -> tuple:
     fps = float(json.loads((run / "best_config.json").read_text())["fps"])
     cache = Cache(run / "cache")
-    clip_s = cache.n / cache.fps
+    clip_s = float(play_mask(run, np.arange(cache.n)).sum()) / cache.fps  # in play only (the game's halves)
     xy = pd.read_csv(run / "tracklet_pitch_xy.csv.gz")
     ident = identity_rows(run, xy)
+    ident = ident[play_mask(run, ident.ci)]
     err = error_model(run)
     ev = event_rows(run, ident, cache.fps)
+    ev = ev[play_mask(run, ev.ci)]
     rows = []
     for jersey, d in ident.groupby("jersey"):
         s = running_stats(smooth_steps(d, fps), fps, clip_s, err)

@@ -202,10 +202,13 @@ def cmd_plan(args) -> None:
 
 def cmd_confirm(args) -> None:
     g = load_game(args.game)
+    before = windows(g)  # the windows as they are, before any correction of the halves
     if args.first_half:
         g["first_half"] = args.first_half.split("-")
     if args.second_half:
         g["second_half"] = args.second_half.split("-")
+    if (args.first_half or args.second_half) and any((game_folder(args.game) / n).exists() for n, _ in before):
+        g.setdefault("windows", before)  # already processed: keep those windows, stats keep to the new halves
     if args.first_half or args.second_half:
         g["halftime_min"] = round((parse_time(g["first_half"][1]) + parse_time(g["second_half"][0])) / 2 / 60, 1)
     g["confirmed"] = True
@@ -217,7 +220,11 @@ def cmd_confirm(args) -> None:
 
 
 def windows(g: dict) -> list:
-    """(name, start) 5-minute windows over both halves; a half's last window ends at the half's end."""
+    """(name, start) 5-minute windows over both halves; a half's last window ends at the half's end. A game whose
+    halves were corrected after its windows were processed keeps those windows ("windows" in the game file): stats
+    count only the time inside the halves (sv_common.play_mask)."""
+    if g.get("windows"):
+        return [tuple(w) for w in g["windows"]]
     out = []
     for key in ("first_half", "second_half"):
         a, b = (parse_time(x) for x in g[key])
@@ -229,16 +236,43 @@ def windows(g: dict) -> list:
     return out
 
 
-# GPU-heavy stages share the laptop GPU (6 GB): two detections at once barely slow each other, but three identity
-# runs at once (jersey reader + appearance model each) filled GPU memory and took over 40 min instead of about 3
-GPU_SLOTS = {
-    "run_all.py": threading.Semaphore(2),
-    "ball_finetune.py": threading.Semaphore(1),
-    "jersey_auto.py": threading.Semaphore(1),
-}
+# GPU-heavy stages share the laptop GPU (6 GB) in units: two detections at once barely slow each other (one unit
+# each), but an identity run (jersey reader + appearance model) next to two detections filled GPU memory and ran at a
+# tenth of its speed, with both detections at a quarter of theirs (Varsity game 1: 3 fps instead of 13). So identity
+# takes both units: it runs alone on the GPU, and detections wait for it.
+GPU_UNITS = threading.Semaphore(2)
+GPU_TAKE = threading.Lock()  # a stage needing both units takes them together (no two half-held claims)
+UNITS = {"run_all.py": 1, "ball_finetune.py": 1, "jersey_auto.py": 2}
 
 
-def run_stages(video: Path, game: str, name: str, start: str, upto: str | None = None) -> Path:
+class gpu_units:
+    def __init__(self, n: int):
+        self.n = n
+
+    def __enter__(self):
+        with GPU_TAKE:
+            for _ in range(self.n):
+                GPU_UNITS.acquire()
+
+    def __exit__(self, *exc):
+        for _ in range(self.n):
+            GPU_UNITS.release()
+
+
+def team_ready(team: str) -> bool:
+    """Whether the jersey reader has learned this team: owner-labeled windows of the team, or owner-confirmed crops
+    of its numbers (a seed round). Before that, identity is skipped in `run` (it would be redone after the seed)."""
+    if any(team_of(Path(p)) == team for p in LABELED.split(",")):
+        return True
+    truth = DATA_DIR / "jersey_rare_truth.csv"
+    if not truth.exists():
+        return False
+    t = pd.read_csv(truth)
+    runs = t[t.shows_number.astype(bool)].run.unique()
+    return any((DATA_DIR / r).exists() and team_of(DATA_DIR / r) == team for r in runs)
+
+
+def run_stages(video: Path, game: str, name: str, start: str, upto: str | None = None, identity: bool = True) -> Path:
     run_dir = game_folder(game) / name
     run_dir.mkdir(parents=True, exist_ok=True)
     labeled = [Path(p).resolve() for p in LABELED.split(",")]
@@ -246,8 +280,10 @@ def run_stages(video: Path, game: str, name: str, start: str, upto: str | None =
         for done, cmd in stages(video, run_dir.resolve(), start, labeled):
             if upto and cmd[0] == upto:
                 break
+            if cmd[0] == "jersey_auto.py" and not identity:
+                continue
             if not done.exists():
-                with GPU_SLOTS.get(cmd[0], nullcontext()):
+                with gpu_units(UNITS[cmd[0]]) if cmd[0] in UNITS else nullcontext():
                     run(cmd, log)
     return run_dir
 
@@ -401,7 +437,7 @@ def kickoff_probe(video: Path, game: str, g: dict) -> Path:
          ["pitch_calibrate.py", "apply", "--run", r, "--anchors", r / "pitch_anchors_ptz.local.json"]),
     ]:  # fmt: skip
         if not done.exists():
-            with GPU_SLOTS.get(cmd[0], nullcontext()):
+            with gpu_units(UNITS[cmd[0]]) if cmd[0] in UNITS else nullcontext():
                 run(cmd)
     return r
 
@@ -477,18 +513,31 @@ def cmd_run(args) -> None:
             for stale in ("tracklet_roles.csv", "events.csv", "identity_segments.csv", "player_identity.csv"):
                 (roles.parent / stale).unlink(missing_ok=True)
 
+    # a team the reader has not learned yet: identity would be thrown away after the seed round, so it waits
+    ready = team_ready(g.get("team", DEFAULT_TEAM))
+    failed = []
+
     def one(item):
         name, start = item
         print(f"{name} ({start}) started", flush=True)
-        run_stages(video, args.game, name, start)
+        try:
+            run_stages(video, args.game, name, start, identity=ready)
+        except subprocess.CalledProcessError as e:  # one window failing must not stop the others
+            failed.append(name)
+            print(f"{name} FAILED ({e.cmd[2] if len(e.cmd) > 2 else e}); see {name}_window.log", flush=True)
+            return
         print(f"{name} done", flush=True)
 
     # windows in parallel: two detections at once barely slow each other on the laptop GPU (11.6 vs 11.3 min), and
     # the pitch fit is CPU work; each worker runs one window's stages in order
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         list(pool.map(one, names))
+    if failed:
+        raise SystemExit(f"windows failed: {failed}. Fix the cause (see their logs) and rerun `run`: finished windows "
+                         "are skipped.")  # fmt: skip
     if g.get("first_half_our_goal_x") is None:
-        x, kick = goal_vote(args.game, [n for n, _ in names], g), kickoff_end(args.game, g, video)
+        x = goal_vote(args.game, [n for n, _ in names], g) if ready else None
+        kick = kickoff_end(args.game, g, video)
         if x is not None and kick is not None and x != kick:
             raise SystemExit(
                 f"Which goal we defend is unclear: the goalkeeper vote says X = {x:.0f} in the first half, the "
@@ -502,11 +551,18 @@ def cmd_run(args) -> None:
         else:
             g["first_half_our_goal_x"] = x
             save_game(args.game, g)
-            print(f"we defend X = {x:.0f} in the first half (goalkeeper vote); identity again with that known")
-            for name, _ in names:
+            print(f"we defend X = {x:.0f} in the first half; identity again with that known")
+            for name, _ in names if ready else []:
                 run(["jersey_auto.py", "identify", "--run", game_folder(args.game) / name, "--from", LABELED,
                      "--write", "--force"])  # fmt: skip
     check_play(args.game, g, names)
+    if not ready:
+        print("\nA new team: the jersey reader has not seen its numbers yet, so identity waits for the seed round.")
+        print(f"Next (about 15-20 min of the owner's time): `new_game.py numbers --game {args.game} --seed`, then "
+              f"`--apply` (identity, stats and coaching pages).")  # fmt: skip
+        if g.get("first_half_our_goal_x") is None:
+            print('Which goal we defend is not known: set "first_half_our_goal_x" in game.local.json before --apply.')
+        return
     runs = ",".join(str(game_folder(args.game) / n) for n, _ in names)
     run(["player_stats.py", "--runs", runs])
     if g.get("first_half_our_goal_x") is None:

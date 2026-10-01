@@ -88,6 +88,24 @@ def read_roster(team: str = DEFAULT_TEAM) -> pd.DataFrame:
     return r
 
 
+def play_mask(run: Path, ci) -> np.ndarray:
+    """True where a cached frame lies inside one of the game's halves (game.local.json, video time). The halves are
+    the owner's: a window may run a little past them (5-minute windows), and that time is not play. All True when
+    the game file has no halves (the first game's hand-picked windows)."""
+    ci = np.asarray(ci, dtype=float)
+    path = game_file(run, "game.local.json")
+    g = json.loads(path.read_text()) if path.exists() else {}
+    if not g.get("first_half") or not g.get("second_half"):
+        return np.ones(len(ci), bool)
+    meta = json.loads((Path(run) / "cache" / "meta.json").read_text())
+    t = parse_time(meta["clip_start"]) + ci / float(meta["cache_fps"])
+    out = np.zeros(len(ci), bool)
+    for key in ("first_half", "second_half"):
+        a, b = (parse_time(x) for x in g[key])
+        out |= (t >= a) & (t <= b)
+    return out
+
+
 GRADES = {1: "Senior", 2: "Junior", 3: "Sophomore", 4: "Freshman"}
 
 

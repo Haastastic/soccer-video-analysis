@@ -631,9 +631,31 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   are per team (site_export/<team>/, release <stamp>/<team>/ + teams.json); the site serves /t/<team>/... with a
   team switch, per-team names, logos, opponents and access (users: admin flag + teams {team: {role, players}}; users,
   the team setting and game opponents saved before teams count as jv).
-- Varsity game 1 (data/v0903, 2026-09-03 video, 2.5 h recording at night): halves from the overview 0:05-0:50 and
-  1:02-1:32 (warm-up before, the pitch emptying after; the camera kept recording in the dark), kit mapping by the
-  owner.
+- Varsity game 1 (data/v0903, 2026-09-03 video, 2.5 h recording at night): halves first from the overview, then the
+  owner's exact times 0:05:53-0:51:18 and 1:03:10-1:30:20 (a 27-minute second half). Kit mapping by the owner per
+  half (second half: one cluster mixed our players with the opposing goalkeeper, mapped target). Goal end from the
+  owner (the kickoff probe found no painted lines: halftime huddle under the lights); in this camera's view X grows
+  to the left, so the left goal is X = length.
+- Seed round: 562 candidate crops for 17 numbers, owner confirmed 347 in about 25 min (none for the goalkeeper,
+  whose back rarely faces the camera, nor for one number that hardly played). Held out on the confirmed second-half
+  crops (133, 14 numbers), a reader trained without them: 131 confident reads at 98.5% right vs 118 at 98.3% for
+  the JV-trained reader (candidates come from reads, which flatters every reader). After `numbers --apply`:
+  37-64% of target samples identified per window (JV games 34-55%), 204 identified player-minutes (202 in play).
+- Goalkeeper: found by place in only 2 windows. Tracks living in our box at night are classed unknown (16 of 19):
+  the keeper's kit matches no mapped cluster and the track breaks into short pieces, under the rule's 40 samples.
+- Night pitch fit: 50-99% of 2 s frames fixed per window (daylight 89-100%). A camera refit from this game's fixed
+  frames moved the centre 3 cm and changed nothing (62 -> 62, 50 -> 49, 59 -> 60%): the lines are fainter, not
+  the camera elsewhere. Rejected frames score a median of about 1300 against the 2000 cut, and wrong locks scored up
+  to 1600 in the anchor fit, so lowering the cut is unsafe without night anchors. Gaps are bridged by camera motion;
+  the noise floor (21-30 m/min) is within game 1's daylight range (17-29). Left as it is.
+- Halves corrected after processing: the game file keeps its processed windows ("windows"), and stats and coaching
+  count only time inside the halves (sv_common.play_mask; games without halves, the first game, are untouched).
+- Lessons from the run: (1) stopping a run while it cuts clips leaves truncated clip.mp4 files that the next run
+  reuses ("moov atom not found"): delete those folders. (2) An identity run beside two detections filled GPU memory
+  and everything ran at a quarter speed or less (detection 3 fps instead of 13); new_game.py now gives identity the
+  whole GPU (two units, detection one). (3) One failed window stopped the queue; failures are now reported at the end
+  and the other windows finish. (4) A team the reader has not learned skips identity in `run` (team_ready) and goes
+  straight to the seed round. (5) Background tasks stop after 2 h: a whole-game run is started as its own process.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
