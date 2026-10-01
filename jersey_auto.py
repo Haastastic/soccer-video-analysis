@@ -179,8 +179,8 @@ def cmd_features(args) -> None:
         print(f"{r}: {len(rows)} samples, {F.shape}; {len(reads)} number reads")
 
 
-def roster_numbers(team: str = DEFAULT_TEAM) -> np.ndarray:
-    return np.array(sorted(read_roster(team).jersey))
+def roster_numbers(team: str = DEFAULT_TEAM, run: Path | None = None) -> np.ndarray:
+    return np.array(sorted(read_roster(team, run).jersey))
 
 
 def same_team(sources: list, run: Path) -> list:
@@ -283,7 +283,7 @@ def identify(run: Path, sources: list, reader_path: Path) -> pd.DataFrame:
     """Samples with jersey (NaN where not trusted) and the number of agreeing reads behind it."""
     from sklearn.linear_model import LogisticRegression
 
-    roster = roster_numbers(team_of(run))
+    roster = roster_numbers(team_of(run), run)
     sources = same_team(sources, run)
     rows, F = sample_features(run)
     reads, lp_read = read_evidence(rows, number_reads(run, reader_path, PROD_READ_CI), roster)
@@ -357,6 +357,9 @@ def known_goal_end(run: Path, length: float) -> float | None:
 # our goal line). Game 1's owner windows, counting every pick on an opponent/other tracklet as wrong: 94% right,
 # 62% of the goalkeeper's time found (exp13b.py; looser settings found 82% at 82 to 87% right).
 GKP_BOX_M, GKP_HALF_WIDTH_M, GKP_SHARE, GKP_SPREAD_M, GKP_MIN_SAMPLES = 11.0, 20.16, 0.6, 6.0, 40
+# A track the kit colours call goalkeeper needs far fewer samples (about 4 s): its colour already says goalkeeper. Night
+# Varsity game: the keeper's tracks break into short pieces, and only 1.8 of 3.7 min in our box were in tracks of 40+.
+GKP_MIN_SAMPLES_ROLE = 8
 
 
 def has_keeper_kit(run: Path) -> bool:
@@ -387,7 +390,9 @@ def goalkeeper_by_position(run: Path) -> pd.DataFrame:
     agg = t.groupby("track").agg(
         share=("inbox", "mean"), n=("inbox", "size"), spread=("x", lambda s: s.quantile(0.9) - s.quantile(0.1))
     )
-    good = agg.index[(agg.share >= GKP_SHARE) & (agg.spread <= GKP_SPREAD_M) & (agg.n >= GKP_MIN_SAMPLES)]
+    keeper_role = agg.index.isin(roles.index[roles.role == "goalkeeper"])
+    min_n = np.where(keeper_role, GKP_MIN_SAMPLES_ROLE, GKP_MIN_SAMPLES)
+    good = agg.index[(agg.share >= GKP_SHARE) & (agg.spread <= GKP_SPREAD_M) & (agg.n >= min_n)]
     idx = np.flatnonzero(inbox & np.isin(rows.track_id.to_numpy(), good))
     if len(idx):
         dist = pd.Series(np.abs(x[idx] - end), index=idx)
@@ -405,7 +410,7 @@ def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: li
     """(goalkeeper's jersey, per-sample flag) for samples taken to be our goalkeeper."""
     from sklearn.linear_model import LogisticRegression
 
-    roster = read_roster(team_of(run))
+    roster = read_roster(team_of(run), run)
     keepers = roster[roster.goalkeeper].jersey
     none = np.zeros(len(rows), bool)
     if len(keepers) != 1:
@@ -491,7 +496,7 @@ def cmd_identify(args) -> None:
         return
     if (run / "jersey_truth.csv").exists() and not args.force:
         raise SystemExit(f"{run} has owner jersey labels (jersey_truth.csv); pass --force to replace their outputs")
-    roster = read_roster(team_of(run))
+    roster = read_roster(team_of(run), run)
     s_seg = s
     if keeper_by_place(run, sources):  # the goalkeeper by place, from every tracklet; reads and other names win
         gk = roster[roster.goalkeeper].jersey

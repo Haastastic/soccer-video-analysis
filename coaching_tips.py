@@ -148,7 +148,23 @@ def load_game(runs: list) -> dict:
     for d in (s, ev):
         d["run"] = label + "/" + d.run
         d["game"] = label
-    return dict(folder=folder, label=label, runs=runs, length=length, width=width, s=s, ev=ev, team=team_of(runs[0]))
+    return dict(
+        folder=folder,
+        label=label,
+        runs=runs,
+        length=length,
+        width=width,
+        s=s,
+        ev=ev,
+        team=team_of(runs[0]),
+        roster=read_roster(team_of(runs[0]), runs[0]),
+    )
+
+
+def pooled_roster(gs: list) -> pd.DataFrame:
+    """One roster for several games: every game's players, the latest game's entry for a jersey listed in several."""
+    rs = [g["roster"] for g in sorted(gs, key=lambda g: g["label"])]
+    return pd.concat(rs, ignore_index=True).drop_duplicates("jersey", keep="last").reset_index(drop=True)
 
 
 def phase(t_min: pd.Series, halftime: float, game_end: float) -> pd.Series:
@@ -185,14 +201,16 @@ def touch_expectation(per: pd.DataFrame, ev: pd.DataFrame, keepers: set) -> pd.D
     return per
 
 
-def metrics(s: pd.DataFrame, ev: pd.DataFrame, team: str = DEFAULT_TEAM) -> pd.DataFrame:
+def metrics(
+    s: pd.DataFrame, ev: pd.DataFrame, team: str = DEFAULT_TEAM, roster: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Per-player metrics. s needs a phase column (load_game). The grade (Freshman to Senior) is for the school
     year of the latest game in s."""
     s = s[s.speed.isna() | (s.speed <= MAX_SPEED_MPS)].copy()
     s["jersey"] = s.jersey.astype(int)
     s["fast"] = s.speed >= SPEED_BANDS["run"][0]
     s["sprint"] = s.speed >= SPEED_BANDS["fast"][0]
-    roster = read_roster(team)
+    roster = read_roster(team) if roster is None else roster
     keepers = set(roster.jersey[roster.goalkeeper])
     # relative work rate: this player's mean speed / the median of identified teammates in the same window
     per = s.groupby(["jersey", "run"]).agg(v=("speed", "mean"), n=("speed", "size"), fps=("fps", "first"))
@@ -488,7 +506,7 @@ def single_game(g: dict) -> None:
     """The one-game pages in <game folder>/coaching/."""
     out = g["folder"] / "coaching"
     s, runs = g["s"], g["runs"]
-    m = metrics(s, g["ev"], g["team"])
+    m = metrics(s, g["ev"], g["team"], g["roster"])
     out.mkdir(parents=True, exist_ok=True)
     m.round(3).to_csv(out / "player_metrics.csv", index=False)
     lines = [
@@ -580,10 +598,10 @@ def multi_game(gs: list, share_dir: Path | None = None) -> None:
     out = multi_out(gs[0]["team"])
     s = pd.concat([g["s"] for g in gs], ignore_index=True)
     ev = pd.concat([g["ev"] for g in gs], ignore_index=True)
-    m = metrics(s, ev, gs[0]["team"])
+    m = metrics(s, ev, gs[0]["team"], pooled_roster(gs))
     # each game keeps its own roles: a player moved to another position in one game is compared with that
     # game's players in the same role, not with the role pooled over games
-    per = {g["label"]: metrics(g["s"], g["ev"], g["team"]) for g in gs}
+    per = {g["label"]: metrics(g["s"], g["ev"], g["team"], g["roster"]) for g in gs}
     out.mkdir(parents=True, exist_ok=True)
     table = pd.concat([m.assign(scope="pooled")] + [q.assign(scope=k) for k, q in per.items()])
     table.round(3).to_csv(out / "player_metrics.csv", index=False)
