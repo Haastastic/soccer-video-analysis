@@ -57,6 +57,7 @@ from sv_common import (
     game_file,
     grade,
     parse_time,
+    play_mask,
     read_roster,
     require_under_data,
     team_of,
@@ -86,7 +87,8 @@ def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
     cache = Cache(run / "cache")
     start_min = parse_time(json.loads((run / "cache" / "meta.json").read_text())["clip_start"]) / 60
     xy = pd.read_csv(run / "tracklet_pitch_xy.csv.gz")
-    d = smooth_steps(identity_rows(run, xy), fps)
+    ident = identity_rows(run, xy)
+    d = smooth_steps(ident[play_mask(run, ident.ci)], fps)  # time outside the game's halves is not play
     d["t_min"] = start_min + d.ci / cache.fps / 60
     second = d.t_min > game["halftime_min"]
     first_goal = float(game["first_half_our_goal_x"])
@@ -119,7 +121,7 @@ def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
 def window_events(run: Path) -> pd.DataFrame:
     """Touches and possessions of identified players (player_stats.py's player_events.csv), every confidence."""
     ev = pd.read_csv(run / "player_events.csv")
-    ev = ev[ev.type.isin(["touch", "possession"]) & ev.jersey.notna()].copy()
+    ev = ev[ev.type.isin(["touch", "possession"]) & ev.jersey.notna() & play_mask(run, ev.ci)].copy()
     ev["jersey"] = ev.jersey.astype(int)
     ev["dur_s"] = np.where(ev.type == "possession", ev.end_s - ev.time_s, 0.0)
     ev["run"] = run.name
