@@ -3,12 +3,13 @@
 The site builds the same pages as coaching_tips.py (coaching_html.py's builders), but per request, so a parent sees
 team numbers with only their own players named. So this writes the builders' inputs, not HTML:
 
-  data/site_export/manifest.json          games (id = label, pitch size, windows), when exported
-  data/site_export/season/metrics.csv     pooled metrics over every game given (one row per player)
-  data/site_export/season/meds.csv        pooled role medians per player
-  data/site_export/season/tagged.json     observations tagged by game (coaching_tips.tag_tips)
-  data/site_export/games/<id>/metrics.csv that game's metrics; meds.csv, tips.json the same for that game
-  data/site_export/games/<id>/samples.csv.gz  identified positions (jersey, from_goal, y_team) for the heatmaps
+One folder per team (data/site_export/<team>/, team from each game's game.local.json), each holding:
+  data/site_export/<team>/manifest.json   games (id = label, pitch size, windows), when exported
+  data/site_export/<team>/season/metrics.csv     pooled metrics over every game given (one row per player)
+  data/site_export/<team>/season/meds.csv        pooled role medians per player
+  data/site_export/<team>/season/tagged.json     observations tagged by game (coaching_tips.tag_tips)
+  data/site_export/<team>/games/<id>/metrics.csv that game's metrics; meds.csv, tips.json the same for that game
+  data/site_export/<team>/games/<id>/samples.csv.gz  identified positions (jersey, from_goal, y_team) for the heatmaps
 
 It holds names of minors (from roster.csv) and stays under data/ (git-ignored) until publish_site.py uploads it to
 the private bucket. No video, crops or detections are exported; photos are chosen separately (player_photo.py).
@@ -43,12 +44,20 @@ def with_confidence(m: pd.DataFrame) -> pd.DataFrame:
     return m.assign(conf=[ct.confidence(x) for x in m.minutes])
 
 
-def export(gs: list, out: Path = OUT) -> None:
+def export(gs: list, out: Path | None = None) -> None:
+    """One team's games into out (default OUT/<team>): other teams' exports are left alone."""
     gs = sorted(gs, key=lambda g: g["label"])
+    out = out or OUT / gs[0]["team"]
+    for old in ("manifest.json", "season", "games"):  # the single-team layout written before teams existed
+        p = OUT / old
+        if p.is_dir():
+            shutil.rmtree(p)
+        elif p.exists():
+            p.unlink()
     if out.exists():
         shutil.rmtree(out)
     (out / "season").mkdir(parents=True)
-    per = {g["label"]: ct.metrics(g["s"], g["ev"]) for g in gs}
+    per = {g["label"]: ct.metrics(g["s"], g["ev"], g["team"]) for g in gs}
     tm = {k: ct.player_tips(q) for k, q in per.items()}
     games = []
     for g in gs:
@@ -64,7 +73,7 @@ def export(gs: list, out: Path = OUT) -> None:
         games.append(dict(id=k, label=k, n_windows=len(g["runs"]), length=g["length"], width=g["width"]))
     s = pd.concat([g["s"] for g in gs], ignore_index=True)
     ev = pd.concat([g["ev"] for g in gs], ignore_index=True)
-    m = ct.metrics(s, ev)
+    m = ct.metrics(s, ev, gs[0]["team"])
     pooled = ct.player_tips(m)
     tagged = {}
     for _, r in m.iterrows():
@@ -90,9 +99,11 @@ def main() -> None:
         run = require_under_data(Path(r))
         by_game.setdefault(game_dir(run), []).append(run)
     gs = [ct.load_game(rs) for rs in by_game.values()]
-    if len({g["label"] for g in gs}) != len(gs):
-        raise SystemExit('two games share a label: give each game.local.json a "video" name with its date')
-    export(gs)
+    for team in sorted({g["team"] for g in gs}):
+        tg = [g for g in gs if g["team"] == team]
+        if len({g["label"] for g in tg}) != len(tg):
+            raise SystemExit('two games share a label: give each game.local.json a "video" name with its date')
+        export(tg)
 
 
 if __name__ == "__main__":

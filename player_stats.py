@@ -44,9 +44,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sv_common import DATA_DIR, Cache, require_under_data
+from sv_common import DATA_DIR, Cache, read_roster, require_under_data, team_of
 
-ROSTER_FILE = Path(__file__).resolve().parent / "roster.csv"
 SMOOTH_S = 2.0  # 1 s left a 33 to 44 m/min noise floor on still people; 2 s: 24 to 34 (see stats_report.json)
 MAX_SPEED_MPS = 10.0  # faster steps are position glitches; they are dropped and counted
 SPEED_BANDS = {"walk": (0, 2), "jog": (2, 4), "run": (4, 5.5), "fast": (5.5, MAX_SPEED_MPS)}  # m/s, youth guesses
@@ -199,7 +198,7 @@ def clip_stats(run: Path) -> tuple:
         s = running_stats(smooth_steps(d, fps), fps, clip_s, err)
         rows.append(dict(clip=run.name, jersey=int(jersey), **s, **event_stats(ev, jersey)))
     stats = pd.DataFrame(rows)
-    roster = pd.read_csv(ROSTER_FILE)
+    roster = read_roster(team_of(run))
     stats = stats.merge(roster[["jersey", "name"]], on="jersey", how="left")
     report = dict(
         clip=run.name,

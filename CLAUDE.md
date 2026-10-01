@@ -602,6 +602,39 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 - Phone width (390 px, Playwright + Edge on the local site): no page-level sideways scroll on any page; tables keep
   cells on one line and scroll inside their box.
 
+## Phase 22: ball recall, where the ball is lost (experiment, data/_ball_recall/, 2026-09-30)
+- Held out (game 2's w4840 / w0500 with the fold A / B venue models): of visible balls the linked path misses,
+  97 / 85% are at a player's feet (within one body height of a box's bottom), and the detector has no candidate on
+  60 to 77% of them even at confidence 0.05: the ball is hidden by feet and legs, not below a threshold.
+- 2x-magnified overlapping tiles made the detector worse (candidate on the ball 70 -> 58%, 73 -> 66%): the model is
+  trained at native scale.
+- Carrying the ball with the player (fill a gap with a track's feet when the ball was lost and found at that same
+  player's feet; 48 settings of radius, gap and one-sided carry) on 5 ball-labeled and 4 event-labeled windows:
+  correct when visible 65.9 -> 66.3% at best, precision 80.5 -> 74-76%, possession F1 0.619 -> 0.627 (noise).
+  Most missed at-feet balls are not in short gaps bracketed by one player. NOT ADOPTED. Ball recall is now limited
+  by occlusion; the remaining idea (possession from player motion without the ball) is a research project.
+
+## Phase 23: teams (JV and Varsity) and grades (2026-09-30)
+- A game belongs to a team: "team" in its game.local.json (none = jv, the first team; ids are neutral, school and
+  team names never go in committed files). Rosters: roster.csv (jv, repo root, as before) and
+  data/teams/<team>/roster.csv; sv_common.team_of / read_roster / roster_file. Every roster reader goes through
+  them (player_stats, events, coaching_tips, jersey_auto, jersey_label, jersey_rare_label, new_game, player_photo).
+- Rosters carry class_of (graduation year); sv_common.grade gives Freshman..Senior for the school year of the
+  latest game (a school year starts in August), shown with the player on local pages and the site.
+- Identity for a team without owner-labeled windows: `--from` windows of another team are ignored (same_team);
+  the first decode uses reads only, then appearance is learned from this window's read-confirmed samples (the
+  existing second pass), and the goalkeeper is found by place and behaviour (keeper_by_place). JV unchanged
+  (clipE held out from A+B: 49.2% identified, 97.5% right; documented 48.7 / 97.2 before later reader retraining).
+- A new team's first game: `new_game.py numbers --seed` (reads with the original reader, jersey_auto.py reads;
+  candidate crops for every roster number) -> owner labels -> `numbers --apply` retrains the shared reader.
+- Coaching pages per team: data/coaching_games (jv) and data/coaching_games_<team>. The site export and release
+  are per team (site_export/<team>/, release <stamp>/<team>/ + teams.json); the site serves /t/<team>/... with a
+  team switch, per-team names, logos, opponents and access (users: admin flag + teams {team: {role, players}}; users,
+  the team setting and game opponents saved before teams count as jv).
+- Varsity game 1 (data/v0903, 2026-09-03 video, 2.5 h recording at night): halves from the overview 0:05-0:50 and
+  1:02-1:32 (warm-up before, the pitch emptying after; the camera kept recording in the dark), kit mapping by the
+  owner.
+
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
 2. Offline tracker replay and sweep: replay_trackers.py (done; config retuned by blind owner purity labels to buffer 1 s, match 0.95 and APPLIED to both clips - see Phase 6 findings)

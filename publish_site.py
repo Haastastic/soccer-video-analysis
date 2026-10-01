@@ -1,9 +1,10 @@
 """Publish the coaching site's data to its private bucket: the one way per-player data leaves this computer.
 
-Uploads data/site_export/ (site_export.py) and the chosen photos data/site_photos/player_NN.jpg (player_photo.py)
-as a new release under releases/<UTC stamp>/, then points current.json at it, so the site never shows half an
-upload. Only those files are sent, by an allow-list of names; nothing else under data/ (video, crops, caches,
-candidate photos) can go. Lists everything first and asks before uploading. Keeps the newest KEEP releases.
+Uploads data/site_export/<team>/ (site_export.py) and each team's chosen photos (player_photo.py:
+data/site_photos/player_NN.jpg for the first team, data/site_photos/<team>/ for others) as a new release under
+releases/<UTC stamp>/<team>/ with teams.json, then points current.json at it, so the site never shows half an upload.
+Only those files are sent, by an allow-list of names; nothing else under data/ (video, crops, caches, candidate
+photos) can go. Lists everything first and asks before uploading. Keeps the newest KEEP releases.
 
 Needs: gcloud auth application-default login (the owner), and the bucket from webapp/README.md.
 
@@ -20,29 +21,33 @@ import shutil
 import time
 from pathlib import Path
 
-from sv_common import DATA_DIR
+from sv_common import DATA_DIR, DEFAULT_TEAM
 
 EXPORT = DATA_DIR / "site_export"
 PHOTOS = DATA_DIR / "site_photos"
 KEEP = 3
-FILE_RE = re.compile(  # the allow-list: paths inside a release
-    r"^(manifest\.json|season/(metrics\.csv|meds\.csv|tagged\.json)"
+TEAM_RE = r"[a-z0-9_-]+"
+FILE_RE = re.compile(  # the allow-list: paths inside a release (teams.json, then each team's folder)
+    r"^(teams\.json|" + TEAM_RE + r"/(manifest\.json|season/(metrics\.csv|meds\.csv|tagged\.json)"
     r"|games/[A-Za-z0-9_-]+/(metrics\.csv|meds\.csv|tips\.json|samples\.csv\.gz)"
-    r"|photos/player_\d{2}\.jpg)$"
+    r"|photos/player_\d{2}\.jpg))$"
 )
 MIME = {".json": "application/json", ".csv": "text/csv", ".gz": "application/gzip", ".jpg": "image/jpeg"}
 
 
 def release_files() -> list:
     """(path inside the release, local file) for everything to publish; refuses anything off the allow-list."""
-    if not (EXPORT / "manifest.json").exists():
-        raise SystemExit(f"No {EXPORT / 'manifest.json'}: run site_export.py first.")
+    teams = sorted(d.name for d in EXPORT.iterdir() if (d / "manifest.json").exists()) if EXPORT.exists() else []
+    if not teams:
+        raise SystemExit(f"No {EXPORT}/<team>/manifest.json: run site_export.py first.")
     out = []
-    for f in sorted(EXPORT.rglob("*")):
-        if f.is_file():
-            out.append((f.relative_to(EXPORT).as_posix(), f))
-    for f in sorted(PHOTOS.glob("player_*.jpg")):
-        out.append((f"photos/{f.name}", f))
+    for team in teams:
+        for f in sorted((EXPORT / team).rglob("*")):
+            if f.is_file():
+                out.append((f"{team}/{f.relative_to(EXPORT / team).as_posix()}", f))
+        photos = PHOTOS if team == DEFAULT_TEAM else PHOTOS / team  # player_photo.py's folders
+        for f in sorted(photos.glob("player_*.jpg")):
+            out.append((f"{team}/photos/{f.name}", f))
     bad = [p for p, _ in out if not FILE_RE.match(p)]
     if bad:
         raise SystemExit(f"Refusing unexpected files: {bad}")
@@ -96,12 +101,14 @@ def main() -> None:
     args = ap.parse_args()
     files = release_files()
     total = sum(f.stat().st_size for _, f in files)
-    photos = sum(p.startswith("photos/") for p, _ in files)
-    games = json.loads((EXPORT / "manifest.json").read_text())["games"]
+    photos = sum("/photos/" in p for p, _ in files)
+    teams = sorted({p.split("/")[0] for p, _ in files})
+    games = [g for t in teams for g in json.loads((EXPORT / t / "manifest.json").read_text())["games"]]
     for p, f in files:
         print(f"  {p:48s} {f.stat().st_size / 1024:8.0f} KB")
     target_name = args.bucket or args.local_dir
-    print(f"{len(files)} files, {total / 1e6:.1f} MB: {len(games)} game(s), {photos} photos -> {target_name}")
+    print(f"{len(files)} files, {total / 1e6:.1f} MB: teams {teams}, {len(games)} game(s), {photos} photos -> "
+          f"{target_name}")  # fmt: skip
     print("These pages name minors and show their photos; they go to the private bucket behind sign-in only.")
     if args.dry_run:
         return
@@ -112,6 +119,7 @@ def main() -> None:
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for p, f in files:
         target.put(f"releases/{stamp}/{p}", f.read_bytes(), MIME.get(f.suffix, "application/octet-stream"))
+    target.put(f"releases/{stamp}/teams.json", json.dumps({"teams": teams}).encode(), "application/json")
     target.put("current.json", json.dumps({"release": f"releases/{stamp}"}).encode(), "application/json")
     for old in target.releases()[:-KEEP]:
         target.delete_release(old)

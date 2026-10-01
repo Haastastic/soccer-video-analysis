@@ -1,9 +1,10 @@
-"""The published release: the page data site_export.py wrote plus the chosen photos, read from the private bucket
-(or a local folder in development and tests).
+"""The published release: every team's page data (site_export.py) plus the chosen photos, read from the private
+bucket (or a local folder in development and tests).
 
-Layout (publish_site.py writes it): current.json -> {"release": "releases/<stamp>"}; under that prefix the files of
-data/site_export/ and photos/player_NN.jpg. A release is loaded once into memory and reloaded when current.json
-points somewhere new (checked at most every RELOAD_S seconds).
+Layout (publish_site.py writes it): current.json -> {"release": "releases/<stamp>"}; under that prefix teams.json
+({"teams": [...]}) and one folder per team with the files of data/site_export/<team>/ and photos/player_NN.jpg. A
+release is loaded once into memory and reloaded when current.json points somewhere new (checked at most every
+RELOAD_S seconds).
 """
 
 import io
@@ -91,6 +92,14 @@ class Release:
         return row.iloc[0].astype(float) if len(row) else pd.Series(dtype=float)
 
 
+class Site:
+    """Every team's release: teams in the order teams.json lists them."""
+
+    def __init__(self, store, prefix: str):
+        teams = json.loads(store.read(f"{prefix}/teams.json"))["teams"]
+        self.teams = {t: Release(store, f"{prefix}/{t}") for t in teams}
+
+
 class ReleaseCache:
     """The current release, reloaded when the bucket's current.json changes."""
 
@@ -99,7 +108,7 @@ class ReleaseCache:
         self.lock = threading.Lock()
         self.release, self.prefix, self.checked = None, None, 0.0
 
-    def get(self) -> Release | None:
+    def get(self) -> Site | None:
         now = time.time()
         if self.release is not None and now - self.checked < RELOAD_S:
             return self.release
@@ -110,5 +119,5 @@ class ReleaseCache:
                 return self.release
             prefix = json.loads(raw)["release"]
             if prefix != self.prefix:
-                self.release, self.prefix = Release(self.store, prefix), prefix
+                self.release, self.prefix = Site(self.store, prefix), prefix
         return self.release

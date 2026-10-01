@@ -26,6 +26,9 @@ which goal we defend), pitch_camera.local.json and kit_prototypes.local.json.
             conflict or are rarely trusted in this game, confirmed with jersey_rare_label.py label; then
             `numbers --apply` retrains the reader and redoes identity, stats and pages (CLAUDE.md Phase 17).
             Optional: worth it when a number is badly under-trusted (game 3: +1.6% identified time).
+            A new team's first game needs it: `numbers --seed` shows every roster number (about 15-20 min), since
+            the reader has not seen that team's numbers. Set "team" in game.local.json before `setup` (see
+            sv_common's teams note; the roster goes in data/teams/<team>/roster.csv).
   6. publish  Put every game on the coaching site (webapp/README.md): export the pages' data for all games
             (site_export.py), offer the photo picker for players who have no photo decision yet (player_photo.py;
             players already chosen or skipped are left alone), then upload (publish_site.py lists the files and
@@ -57,7 +60,7 @@ import numpy as np
 import pandas as pd
 
 from run_windows import stages
-from sv_common import DATA_DIR, parse_time, require_under_data
+from sv_common import DATA_DIR, DEFAULT_TEAM, parse_time, read_roster, require_under_data, team_of
 
 HERE = Path(__file__).resolve().parent
 WINDOW_S = 300
@@ -316,8 +319,8 @@ def cmd_setup(args) -> None:
 
 def goal_vote(game: str, names: list, g: dict) -> float | None:
     """X of the goal our goalkeeper defends in the first half: where the goalkeeper stretches sit, by majority."""
-    roster = pd.read_csv(HERE / "roster.csv")
-    gk = roster[roster.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
+    roster = read_roster(g.get("team", DEFAULT_TEAM))
+    gk = roster[roster.goalkeeper].jersey
     length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
     half_end = parse_time(g["first_half"][1]) / 60
     votes = []
@@ -410,7 +413,11 @@ def kickoff_end(game: str, g: dict, video: Path | None = None) -> float | None:
     kickoff, checked on a still, caught it."""
     length = json.loads((game_folder(game) / "pitch_camera.local.json").read_text())["length_m"]
     first = next((n for n, s in windows(g) if s == g["second_half"][0]), None)
-    dirs = [kickoff_probe(video, game, g)] if video is not None else []
+    try:
+        dirs = [kickoff_probe(video, game, g)] if video is not None else []
+    except subprocess.CalledProcessError as e:  # e.g. no painted lines found in the probe (night game, huddle)
+        print(f"kickoff probe failed ({e.cmd[2] if len(e.cmd) > 2 else e}): no kickoff evidence")
+        return None
     dirs += [game_folder(game) / first] if first else []
     for run_dir in dirs:
         if (run_dir / "tracklet_pitch_xy.csv.gz").exists():
@@ -517,9 +524,17 @@ def cmd_numbers(args) -> None:
     g = load_game(args.game)
     runs = [game_folder(args.game) / n for n, _ in windows(g)]
     joined = ",".join(str(r) for r in runs)
-    if not args.apply:
+    if not args.apply and args.seed:
+        # a new team's first game: the reader has never seen this team's numbers, so every roster number gets a
+        # screen, from the original reader's reads (the fine-tuned one leans towards the first team's numbers)
+        run(["jersey_auto.py", "reads", "--runs", joined])
+        numbers = ",".join(str(j) for j in read_roster(g.get("team", DEFAULT_TEAM)).jersey)
+        run(["jersey_rare_label.py", "candidates", "--numbers", numbers, "--max-per-number", "36", "--labeled",
+             LABELED, "--runs", joined])  # fmt: skip
+    elif not args.apply:
         run(["jersey_rare_label.py", "candidates", "--auto", "--max-per-number", "36", "--labeled", LABELED,
              "--runs", joined])  # fmt: skip
+    if not args.apply:
         print("\nOwner: python jersey_rare_label.py label  (one screen per number: click the crops that clearly show")
         print(f"it on our players, then Enter). Then: python new_game.py numbers --game {args.game} --apply")
         return
@@ -549,10 +564,11 @@ def all_windows() -> list:
     return found
 
 
-def missing_photos() -> list:
-    """Players on the site (the export) with no photo decision: neither a chosen photo nor "no photo"."""
-    players = pd.read_csv(DATA_DIR / "site_export" / "season" / "metrics.csv").jersey.astype(int)
-    choices = DATA_DIR / "site_photos" / "choices.csv"
+def missing_photos(team: str) -> list:
+    """A team's players on the site (its export) with no photo decision: neither a chosen photo nor "no photo"."""
+    players = pd.read_csv(DATA_DIR / "site_export" / team / "season" / "metrics.csv").jersey.astype(int)
+    folder = DATA_DIR / "site_photos" if team == DEFAULT_TEAM else DATA_DIR / "site_photos" / team
+    choices = folder / "choices.csv"
     decided = set(pd.read_csv(choices).jersey.astype(int)) if choices.exists() else set()
     return sorted(set(players) - decided)
 
@@ -563,17 +579,21 @@ def cmd_publish(args) -> None:
     bucket = args.bucket or os.environ.get("SITE_BUCKET")
     if not bucket:
         raise SystemExit("Give --bucket (or set SITE_BUCKET): the site's private bucket, see webapp/README.md.")
-    runs = ",".join(str(w) for w in all_windows())
-    print(f"{runs.count(',') + 1} windows")
-    run(["site_export.py", "--runs", runs])
-    new = missing_photos()
-    if new and not args.no_photos:
-        print(f"{len(new)} player(s) without a photo decision: {new}. Finding candidate crops...")
-        run(["player_photo.py", "candidates", "--runs", runs, "--jerseys", ",".join(map(str, new))])
-        print("Owner: pick one photo per player in the window (s = no photo, initials instead; q = stop).")
-        run(["player_photo.py", "label"])
-    elif new:
-        print(f"{len(new)} player(s) without a photo decision (shown with initials): {new}")
+    windows_all = all_windows()
+    runs = ",".join(str(w) for w in windows_all)
+    print(f"{len(windows_all)} windows")
+    run(["site_export.py", "--runs", runs])  # one export per team
+    for team in sorted({team_of(w) for w in windows_all}):
+        team_runs = ",".join(str(w) for w in windows_all if team_of(w) == team)
+        new = missing_photos(team)
+        if new and not args.no_photos:
+            print(f"{team}: {len(new)} player(s) without a photo decision: {new}. Finding candidate crops...")
+            run(["player_photo.py", "--team", team, "candidates", "--runs", team_runs, "--jerseys",
+                 ",".join(map(str, new))])  # fmt: skip
+            print("Owner: pick one photo per player in the window (s = no photo, initials instead; q = stop).")
+            run(["player_photo.py", "--team", team, "label"])
+        elif new:
+            print(f"{team}: {len(new)} player(s) without a photo decision (shown with initials): {new}")
     # publish_site.py asks before uploading, so it runs attached to this terminal
     subprocess.run([sys.executable, "publish_site.py", "--bucket", bucket], check=True, cwd=HERE)
 
@@ -600,6 +620,7 @@ def main() -> None:
     nb = sub.add_parser("numbers", help="the per-game jersey round: confirm crops of conflicting numbers")
     nb.add_argument("--game", required=True)
     nb.add_argument("--apply", action="store_true", help="after the owner labeled: retrain the reader, redo the game")
+    nb.add_argument("--seed", action="store_true", help="a new team's first game: a screen for every roster number")
     nb.set_defaults(fn=cmd_numbers)
     pb = sub.add_parser("publish", help="every game to the coaching site: export, photos for new players, upload")
     pb.add_argument("--bucket", help="the site's private bucket (default: SITE_BUCKET)")

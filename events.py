@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sv_common import Cache, cache_stride, game_file, parse_time, read_frames, require_under_data
+from sv_common import Cache, cache_stride, game_file, parse_time, read_frames, require_under_data, roster_file, team_of
 
 TEAM_ROLES = {"target": "target", "opponent": "opponent", "goalkeeper": "goalkeeper"}
 CONTACT_H = 0.6  # ball this close to the feet (in body heights) counts as contact
@@ -66,7 +66,7 @@ def our_goal_x(run: Path, length: float) -> float | None:
             mid_min = (parse_time(meta["clip_start"]) + float(meta["clip_duration"]) / 2) / 60
             first = float(g["first_half_our_goal_x"])
             return (length - first if first < length / 2 else 0.0) if mid_min > g["halftime_min"] else first
-    segs, roster = run / "identity_segments.csv", Path(__file__).resolve().parent / "roster.csv"
+    segs, roster = run / "identity_segments.csv", roster_file(team_of(run))
     if segs.exists() and roster.exists():
         r = pd.read_csv(roster)
         gk = r[r.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)

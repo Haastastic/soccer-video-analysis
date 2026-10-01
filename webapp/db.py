@@ -11,8 +11,6 @@ import time
 import uuid
 from pathlib import Path
 
-ROLES = ("admin", "coach", "parent")
-
 
 def norm_email(email: str) -> str:
     return (email or "").strip().lower()
@@ -45,7 +43,9 @@ class MemoryDB:
         return sorted((dict(u) for u in self.data["users"].values()), key=lambda u: u["email"])
 
     def any_admin(self) -> bool:
-        return any(u["role"] == "admin" and u.get("active", True) for u in self.data["users"].values())
+        return any(
+            (u.get("admin") or u.get("role") == "admin") and u.get("active", True) for u in self.data["users"].values()
+        )
 
     def get_setting(self, key: str) -> dict:
         return dict(self.data["settings"].get(key, {}))
@@ -126,6 +126,7 @@ class FirestoreDB:
         return sorted((d.to_dict() for d in self.db.collection("users").stream()), key=lambda u: u["email"])
 
     def any_admin(self) -> bool:
+        # app.save_user keeps role == "admin" in step with the admin flag, so one indexed filter finds them all
         q = self.db.collection("users").where(filter=self.fs.FieldFilter("role", "==", "admin"))
         return any(d.to_dict().get("active", True) for d in q.stream())
 

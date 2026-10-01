@@ -33,8 +33,8 @@ import numpy as np
 import pandas as pd
 
 import jersey_suggest as js
-from player_stats import ROSTER_FILE, identity_rows
-from sv_common import game_file, require_under_data, tracklet_fingerprint
+from player_stats import identity_rows
+from sv_common import DEFAULT_TEAM, game_file, read_roster, require_under_data, team_of, tracklet_fingerprint
 
 SAMPLE_CI = 16  # about 0.5 s at 30 fps; replayed tracklets have rows on even cached frames
 ROLES = ("target", "goalkeeper")
@@ -163,6 +163,14 @@ def number_reads(run: Path, finetuned: Path | None = None, read_ci: int = READ_C
     return reads
 
 
+def cmd_reads(args) -> None:
+    """Cache reads with the original (SoccerNet, not fine-tuned) reader: a new team's first jersey round takes its
+    candidate crops from these, since the fine-tuned reader leans towards the numbers it was trained on."""
+    for r in args.runs.split(","):
+        run = require_under_data(Path(r))
+        print(f"{run.name}: {len(number_reads(run))} reads with the original reader")
+
+
 def cmd_features(args) -> None:
     for r in args.runs.split(","):
         run = require_under_data(Path(r))
@@ -171,8 +179,13 @@ def cmd_features(args) -> None:
         print(f"{r}: {len(rows)} samples, {F.shape}; {len(reads)} number reads")
 
 
-def roster_numbers() -> np.ndarray:
-    return np.array(sorted(pd.read_csv(ROSTER_FILE).jersey.astype(int)))
+def roster_numbers(team: str = DEFAULT_TEAM) -> np.ndarray:
+    return np.array(sorted(read_roster(team).jersey))
+
+
+def same_team(sources: list, run: Path) -> list:
+    """The owner-labeled windows of this window's team: another team's players are not on this roster."""
+    return [s for s in sources if team_of(s) == team_of(run)]
 
 
 def read_evidence(rows: pd.DataFrame, reads: pd.DataFrame, roster: np.ndarray) -> tuple:
@@ -270,7 +283,8 @@ def identify(run: Path, sources: list, reader_path: Path) -> pd.DataFrame:
     """Samples with jersey (NaN where not trusted) and the number of agreeing reads behind it."""
     from sklearn.linear_model import LogisticRegression
 
-    roster = roster_numbers()
+    roster = roster_numbers(team_of(run))
+    sources = same_team(sources, run)
     rows, F = sample_features(run)
     reads, lp_read = read_evidence(rows, number_reads(run, reader_path, PROD_READ_CI), roster)
     meta = json.loads((run / "cache" / "meta.json").read_text())
@@ -288,12 +302,16 @@ def identify(run: Path, sources: list, reader_path: Path) -> pd.DataFrame:
         m &= np.isfinite(xy2).all(1)
         P.append(xy2[m])
         Y.append(y2[m])
-    w = np.concatenate(ws)
-    clf = LogisticRegression(max_iter=4000, C=js.C).fit(
-        np.concatenate(Xs), np.concatenate(ys), sample_weight=w / w.max()
-    )
-    lp_pos = position_logp(np.concatenate(P), np.concatenate(Y), relative_xy(rows), roster)
-    pred, stretch = decode(rows, lp_read + W_APP * appearance_logp(clf, F, roster) + W_POS * lp_pos)
+    if sources:
+        w = np.concatenate(ws)
+        clf = LogisticRegression(max_iter=4000, C=js.C).fit(
+            np.concatenate(Xs), np.concatenate(ys), sample_weight=w / w.max()
+        )
+        lp_pos = position_logp(np.concatenate(P), np.concatenate(Y), relative_xy(rows), roster)
+        pred, stretch = decode(rows, lp_read + W_APP * appearance_logp(clf, F, roster) + W_POS * lp_pos)
+    else:  # a team with no owner-labeled windows yet: reads first, then appearance learned from this window below
+        lp_pos = np.zeros_like(lp_read)
+        pred, stretch = decode(rows, lp_read)
     ok, _ = trusted(rows, reads, roster[pred], stretch, ci_per_s)
     if len(np.unique(pred[ok])) >= 2:  # retrain appearance on this window's read-confirmed samples only
         own = LogisticRegression(max_iter=4000, C=js.C).fit(F[ok], roster[pred[ok]])
@@ -377,18 +395,24 @@ def goalkeeper_by_position(run: Path) -> pd.DataFrame:
     return rows.loc[keep, ["track_id", "ci"]]
 
 
+def keeper_by_place(run: Path, sources: list) -> bool:
+    """The goalkeeper is found by place and behaviour when the kit colours have no goalkeeper class (game 3), or
+    when this team has no owner-labeled windows to learn the goalkeeper's look from (a new team)."""
+    return not has_keeper_kit(run) or not same_team(sources, run)
+
+
 def goalkeeper_samples(run: Path, rows: pd.DataFrame, F: np.ndarray, sources: list) -> tuple:
     """(goalkeeper's jersey, per-sample flag) for samples taken to be our goalkeeper."""
     from sklearn.linear_model import LogisticRegression
 
-    roster = pd.read_csv(ROSTER_FILE)
-    keepers = roster[roster.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
+    roster = read_roster(team_of(run))
+    keepers = roster[roster.goalkeeper].jersey
     none = np.zeros(len(rows), bool)
     if len(keepers) != 1:
         return None, none  # the rule assumes one goalkeeper on the roster
     gk = int(keepers.iloc[0])
-    if not has_keeper_kit(run):
-        return gk, none  # no goalkeeper class: cmd_identify adds goalkeeper_by_position over every tracklet
+    if not has_keeper_kit(run) or not sources:
+        return gk, none  # cmd_identify adds goalkeeper_by_position over every tracklet (keeper_by_place)
     t0 = js.clip_mid_min(run)
     X, Y, W = [], [], []
     for src in sources:
@@ -467,16 +491,16 @@ def cmd_identify(args) -> None:
         return
     if (run / "jersey_truth.csv").exists() and not args.force:
         raise SystemExit(f"{run} has owner jersey labels (jersey_truth.csv); pass --force to replace their outputs")
-    roster = pd.read_csv(ROSTER_FILE)
+    roster = read_roster(team_of(run))
     s_seg = s
-    if not has_keeper_kit(run):  # the goalkeeper by place, from every tracklet; reads and other names win
-        gk = roster[roster.goalkeeper.astype(str).str.lower() == "true"].jersey.astype(int)
+    if keeper_by_place(run, sources):  # the goalkeeper by place, from every tracklet; reads and other names win
+        gk = roster[roster.goalkeeper].jersey
         k = goalkeeper_by_position(run)
         named = s[s.jersey.notna()]
         k = k[~k.track_id.isin(named.track_id) & ~k.ci.isin(named[named.jersey == int(gk.iloc[0])].ci)]
         if len(gk) == 1 and len(k):
             s_seg = pd.concat([s, k.assign(jersey=float(gk.iloc[0]), agree_reads=0)], ignore_index=True)
-            print(f"{run.name}: goalkeeper by place and behaviour (no goalkeeper kit class): {len(k)} samples")
+            print(f"{run.name}: goalkeeper by place and behaviour: {len(k)} samples")
     segs = segments(s_seg).merge(roster[["jersey", "name", "goalkeeper"]], on="jersey", how="left")
     segs.insert(4, "player_id", "auto")
     roles = pd.read_csv(run / "tracklet_roles.csv")[["track_id", "role"]]
@@ -618,6 +642,9 @@ def main() -> None:
     f = sub.add_parser("features", help="cache per-sample appearance features")
     f.add_argument("--runs", required=True, help="comma list of run folders")
     f.set_defaults(fn=cmd_features)
+    f = sub.add_parser("reads", help="cache reads with the original reader (a new team's first jersey round)")
+    f.add_argument("--runs", required=True, help="comma list of run folders")
+    f.set_defaults(fn=cmd_reads)
     f = sub.add_parser("finetune", help="fine-tune the jersey reader on owner-labeled windows")
     f.add_argument("--runs", required=True, help="comma list of labeled run folders")
     f.add_argument("--out", type=Path, default=READER_FT)

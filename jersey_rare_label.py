@@ -13,7 +13,7 @@ PER_TRACKLET per tracklet and MAX_PER_NUMBER per number, best reads first.
 `label` shows one rare number at a time, all its candidate crops at once (windows in order, then time; the same
 grid and zoom as the other crop tools):
 
-  left click   toggle: this crop shows that number (yellow frame)    a  all    n  none
+  left click   toggle: this crop shows that number (yellow frame)    a  all    n  none of them: save and next
   Enter        save this number and go to the next                   b  back one number    q  save and quit
   mouse wheel  zoom, keeping the point under the cursor    right click  center there    r  reset zoom
   scroll bars  appear when part of the grid is hidden: drag, or click to jump
@@ -39,7 +39,7 @@ import numpy as np
 import pandas as pd
 
 import jersey_auto as ja
-from player_stats import ROSTER_FILE, identity_rows
+from player_stats import identity_rows
 from sv_common import (
     FOOTER_H,
     TILE_H,
@@ -50,7 +50,9 @@ from sv_common import (
     crop_tile,
     grid_cols,
     read_frames,
+    read_roster,
     require_under_data,
+    team_of,
     tile_grid,
 )
 
@@ -66,8 +68,8 @@ TRUTH_COLS = ["run", "ci", "track_id", "x1", "y1", "x2", "y2", "number", "shows_
 
 def rare_numbers(labeled: list, min_crops: int) -> list:
     """Roster numbers (goalkeeper aside) with under min_crops owner-labeled crops across the labeled windows."""
-    roster = pd.read_csv(ROSTER_FILE)
-    field = roster[roster.goalkeeper.astype(str).str.lower() != "true"].jersey.astype(int)
+    roster = read_roster(team_of(labeled[0]))
+    field = roster[~roster.goalkeeper].jersey
     counts = pd.Series(np.concatenate([ja.labeled_patches(r)[1] for r in labeled])).value_counts()
     return sorted(int(j) for j in field if counts.get(j, 0) < min_crops)
 
@@ -141,7 +143,7 @@ def conflict_numbers(runs: list) -> tuple:
     read often but rarely identified. also maps each number to its conflict partners, whose crops are shown on its
     screen (misreads of it). Game 2's late windows and game 3 both showed one such pair, and one number read
     1231 times for 46 s of identity."""
-    roster = {str(j) for j in ja.roster_numbers()}
+    roster = {str(j) for j in ja.roster_numbers(team_of(runs[0]))}
     pairs, reads, ident = {}, {}, {}
     for run in runs:
         roles = pd.read_csv(run / "tracklet_roles.csv")
@@ -272,7 +274,10 @@ def render(tiles: list, marks: set, number: int, index: int, total: int, zv: Zoo
     header = f"{index + 1}/{total}  does the green-boxed player wear #{number}?  marked {len(marks)} of {len(tiles)}"
     top = np.zeros((HEADER_H, zoomed.shape[1], 3), np.uint8)
     cv2.putText(top, header + zv.label(), (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-    keys = "click toggle | a all | n none | Enter save+next | b back | q quit | wheel zoom | right-click pan | r reset"
+    keys = (
+        "click toggle | a all | n none+next | Enter save+next | b back | q quit | wheel zoom | right-click pan "
+        "| r reset"
+    )
     return add_footer(np.vstack([top, zoomed]), keys)
 
 
@@ -324,17 +329,17 @@ def cmd_label(args) -> None:
             marks = session.marks.get(session.idx, set())
             cv2.imshow(WINDOW, render(item_tiles, marks, number, session.idx, len(items), zv))
             key = cv2.waitKey(30) & 0xFF
-            if key in (13, 10):
+            if key in (13, 10):  # zoom and view carry over to the next number (owner rule, 2026-09-28)
                 session.finish()
                 save(session, saved)
-                zv.reset()
             elif key == ord("a"):
                 session.set_all(True)
-            elif key == ord("n"):
+            elif key == ord("n"):  # none of these crops show the number: save that and go on (owner, 2026-10-01)
                 session.set_all(False)
+                session.finish()
+                save(session, saved)
             elif key == ord("b"):
                 session.back()
-                zv.reset()
             elif key == ord("r"):
                 zv.reset()
             elif key == ord("q"):

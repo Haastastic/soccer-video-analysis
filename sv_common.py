@@ -55,6 +55,51 @@ def game_file(run: Path, name: str) -> Path:
     return game_dir(run) / name
 
 
+# ---------------------------------------------------------------- teams
+# A game belongs to one team ("team" in its game.local.json; games without one are the first team, DEFAULT_TEAM).
+# Each team has its own roster: the first team's is roster.csv at the repo root (where it always was), any other
+# team's is data/teams/<team>/roster.csv. Both are git-ignored. Team ids are neutral (jv, varsity): school and team
+# names never go in committed files.
+DEFAULT_TEAM = "jv"
+ROSTER_COLS = ["jersey", "name", "goalkeeper"]  # plus optional class_of (graduation year) and position
+
+
+def team_of(run: Path) -> str:
+    """The team of a window's game (DEFAULT_TEAM when the game file does not say)."""
+    path = game_file(run, "game.local.json")
+    if path.exists():
+        return str(json.loads(path.read_text()).get("team") or DEFAULT_TEAM)
+    return DEFAULT_TEAM
+
+
+def roster_file(team: str = DEFAULT_TEAM) -> Path:
+    if team == DEFAULT_TEAM:
+        return DATA_DIR.parent / "roster.csv"
+    return DATA_DIR / "teams" / team / "roster.csv"
+
+
+def read_roster(team: str = DEFAULT_TEAM) -> pd.DataFrame:
+    """The team's roster with jersey as int and goalkeeper as bool."""
+    r = pd.read_csv(roster_file(team))
+    r["jersey"] = r.jersey.astype(int)
+    r["goalkeeper"] = r.goalkeeper.astype(str).str.lower() == "true"
+    if "class_of" not in r:
+        r["class_of"] = np.nan
+    return r
+
+
+GRADES = {1: "Senior", 2: "Junior", 3: "Sophomore", 4: "Freshman"}
+
+
+def grade(class_of, year: int, month: int) -> str:
+    """Freshman to Senior in the school year of that date (a school year starts in August); "Class of N" outside
+    high school years, "" when the class year is unknown."""
+    if class_of is None or (isinstance(class_of, float) and np.isnan(class_of)) or str(class_of).strip() == "":
+        return ""
+    ends = year + (1 if month >= 8 else 0)  # the calendar year the school year ends in
+    return GRADES.get(int(float(class_of)) - ends + 1, f"Class of {int(float(class_of))}")
+
+
 CAM_COLS = ["m00", "m01", "m02", "m10", "m11", "m12"]
 COLOR_COLS = ["torso_r", "torso_g", "torso_b", "legs_r", "legs_g", "legs_b"]
 
