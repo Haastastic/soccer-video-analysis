@@ -397,3 +397,14 @@ def test_icons_public(site):
         assert r.status_code == 200 and r.headers["Content-Type"] == mime and len(r.data) > 100, name
     assert site.client.get("/site.webmanifest").json["icons"][0]["src"] == "/icon-192.png"
     assert site.client.get("/icon-999.png").status_code == 404  # only the listed icons are served
+
+
+def test_team_switch_keeps_the_section(site):
+    site.db.put_user("coach@example.com", dict(role="member", admin=False, active=True, teams={
+        "jv": {"role": "coach", "players": []}, "varsity": {"role": "coach", "players": []}}))  # fmt: skip
+    site.login("coach@example.com")
+    assert f'href="{VA}/games"' in text(site.client.get(f"{JV}/games"))
+    assert f'href="{VA}/games"' in text(site.client.get(f"{JV}/games/{GAMES[0]}"))  # a game page: the games list
+    assert f'href="{VA}/players"' in text(site.client.get(f"{JV}/players"))
+    assert f'href="{VA}/players"' in text(site.client.get(f"{JV}/players/41"))
+    assert f'href="{VA}/"' in text(site.client.get(f"{JV}/"))

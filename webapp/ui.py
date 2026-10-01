@@ -124,11 +124,15 @@ def header(
         links.append(("admin", "/admin", f"Admin{badge}"))
     nav = "".join(f'<a href="{href}"{" class=on" if key == active else ""}>{label}</a>' for key, href, label in links)
     switch = ""
+    # the switch keeps the section (Games, Players): a single game or player page goes to that section's list,
+    # since the other team has other games and players (owner, 2026-10-01)
+    section = {"games": "games", "players": "players"}.get(active, "")
     if len(teams) > 1:
         switch = (
             '<nav class="teams" aria-label="Team">'
             + "".join(
-                f'<a href="/t/{esc(t)}/"{" class=on" if t == team else ""}>{esc(label)}</a>' for t, label in teams
+                f'<a href="/t/{esc(t)}/{section}"{" class=on" if t == team else ""}>{esc(label)}</a>'
+                for t, label in teams
             )
             + "</nav>"
         )
