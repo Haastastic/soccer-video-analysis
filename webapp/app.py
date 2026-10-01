@@ -409,7 +409,7 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
         msg = ""
         if request.method == "POST":
             role = request.form.get("role", "")
-            team = request.form.get("team", "")
+            asked = [t for t in teams if t in request.form.getlist("teams")]
             text = request.form.get("players", "").strip()
             note = request.form.get("note", "").strip()
             recent = [r for r in mine if r["created"] > time.time() - 86400]
@@ -419,18 +419,18 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
                 msg = "Too many requests today. Try again tomorrow."
             elif role not in TEAM_ROLES:
                 msg = "Choose coach or parent."
-            elif team not in teams:
-                msg = "Choose a team."
+            elif not asked:
+                msg = "Choose at least one team."
             elif len(text) > REQUEST_TEXT_MAX or len(note) > REQUEST_NOTE_MAX:
                 msg = "That is too long."
             elif role == "parent" and not text:
                 msg = "Say which player or players you are asking about."
             else:
                 rid = db.add_request(
-                    dict(email=email, name=session.get("name", ""), role=role, team=team, players_text=text,
-                         note=note, created=time.time(), status="pending", decided_by=None)
+                    dict(email=email, name=session.get("name", ""), role=role, teams=asked, team=asked[0],
+                         players_text=text, note=note, created=time.time(), status="pending", decided_by=None)
                 )  # fmt: skip
-                db.audit(email, "request_access", {"id": rid, "role": role, "team": team})
+                db.audit(email, "request_access", {"id": rid, "role": role, "teams": asked})
                 admins = [u["email"] for u in db.list_users() if is_admin(u) and u.get("active", True)]
                 try:
                     notify.send_request_notice(admins, email, url_for("admin_requests", _external=True), send_mail)
@@ -451,13 +451,27 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
             status = '<div class="flash">Your last request was not approved.</div>'
         form = ""
         if not pending:
-            # team names only: they say which request form to fill, nothing about any player
-            opts = "".join(f'<option value="{esc(t)}">{esc(team_label(t))}</option>' for t in teams)
+            # team names only: they say which teams to ask about, nothing about any player
+            mine_now = grants(g.user) if g.user else {}
+
+            def now(t: str) -> str:
+                if g.user and is_admin(g.user):
+                    return " <span class='muted'>(you see everything)</span>"
+                role_now = mine_now.get(t, {}).get("role")
+                if role_now == "coach":
+                    return " <span class='muted'>(you see every player)</span>"
+                return " <span class='muted'>(you have access)</span>" if role_now == "parent" else ""
+
+            boxes = "".join(
+                f'<label><input type="checkbox" name="teams" value="{esc(t)}"> {esc(team_label(t))}{now(t)}</label>'
+                for t in teams
+            )
             form = f"""<form method="post" class="stack">{csrf_field()}
-<label>Team<select name="team">{opts}</select></label>
+<label>Team(s)<div class="checks">{boxes}</div></label>
 <label>I am a<select name="role"><option value="parent">Parent or guardian</option>
 <option value="coach">Coach</option></select></label>
-<label>Which player(s)? (names; parents only)<input type="text" name="players" maxlength="{REQUEST_TEXT_MAX}"></label>
+<label>Which player(s), and on which team? (names; parents only)<input type="text" name="players"
+maxlength="{REQUEST_TEXT_MAX}"></label>
 <label>Note for the admin (optional)<textarea name="note" rows="3" maxlength="{REQUEST_NOTE_MAX}"></textarea></label>
 <button class="primary">Request access</button></form>"""
         flash = f'<div class="flash">{esc(msg)}</div>' if msg else ""
@@ -607,6 +621,10 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
                 parts.append(f"{team_label(t)}: {who}")
         return "; ".join(parts) or "–"
 
+    def requested_teams(r: dict) -> list:
+        """The teams a request asks about (requests made before several teams could be asked name one)."""
+        return list(r.get("teams") or [r.get("team") or LEGACY_TEAM])
+
     def other_active_admins(email: str) -> int:
         return sum(1 for u in db.list_users() if is_admin(u) and u.get("active", True) and u["email"] != email)
 
@@ -750,18 +768,23 @@ Admins see every team.</p>
         items = []
         for r in db.list_requests(status="pending"):
             current = db.get_user(r["email"]) or {}
-            team = r.get("team") or LEGACY_TEAM
-            grant = grants(current).get(team, {})
+            asked = requested_teams(r)
             has = f" (now: {esc(sees(current))})" if current else ""
-            fields = (
-                f"<label>Role{role_select(team, r['role'])}</label>"
-                f"<label>Players (parents){player_checks(team, grant.get('players', []))}</label>"
-                if team in site_teams()
-                else "<p class='sub'>That team is not published now.</p>"
-            )
+            fields = ""
+            for team in asked:
+                grant = grants(current).get(team, {})
+                if team not in site_teams():
+                    fields += f"<p class='sub'>{esc(team_label(team))} is not published now.</p>"
+                    continue
+                fields += (
+                    f"<fieldset><legend>{esc(team_label(team))}</legend>"
+                    f"<label>Role{role_select(team, r['role'])}</label>"
+                    f"<label>Players (parents){player_checks(team, grant.get('players', []))}</label></fieldset>"
+                )
+            names = ", ".join(team_label(t) for t in asked)
             items.append(
                 f"<li><b>{esc(r['email'])}</b> {esc(r.get('name') or '')} asks to be a <b>{esc(r['role'])}</b> for "
-                f"<b>{esc(team_label(team))}</b>{has}"
+                f"<b>{esc(names)}</b>{has}"
                 f"<span class='ev'>Players: {esc(r.get('players_text') or '–')} · Note: {esc(r.get('note') or '–')}"
                 f" · {time.strftime('%Y-%m-%d %H:%M', time.gmtime(r['created']))} UTC</span>"
                 f'<form method="post" action="/admin/requests/{esc(r["id"])}" class="stack" style="margin-top:8px">'
@@ -770,9 +793,9 @@ Admins see every team.</p>
                 '<button name="decision" value="deny">Deny</button></div></form></li>'
             )
         body = (
-            "<h1>Access requests</h1><p class='sub'>Approving gives the account the role and players chosen here, "
-            "for the team asked about (their access to other teams is kept). Check who is asking before approving: "
-            "the players' names are what they typed.</p>"
+            "<h1>Access requests</h1><p class='sub'>Approving gives the account the role and players chosen here "
+            "for each team asked about; a team left at no access is not granted, and access to other teams is "
+            "kept. Check who is asking before approving: the players' names are what they typed.</p>"
             + (f'<ul class="obs">{"".join(items)}</ul>' if items else "<p class='sub'>Nothing waiting.</p>")
         )
         return page("Access requests", body, "admin")
@@ -785,12 +808,13 @@ Admins see every team.</p>
             abort(404)
         decision = request.form.get("decision")
         if decision == "approve":
-            team = r.get("team") or LEGACY_TEAM
-            new = parse_grants().get(team)
-            if new is None:
-                return page("Access requests", '<div class="flash">Choose coach or parent.</div>', "admin", 400)
+            parsed = parse_grants()
+            new = {t: parsed[t] for t in requested_teams(r) if t in parsed}
+            if not new:
+                return page("Access requests", '<div class="flash">Choose coach or parent for at least one team.</div>',
+                            "admin", 400)  # fmt: skip
             current = db.get_user(r["email"]) or {}
-            err = save_user(g.user["email"], r["email"], is_admin(current), {**grants(current), team: new}, True,
+            err = save_user(g.user["email"], r["email"], is_admin(current), {**grants(current), **new}, True,
                             f"request {rid}")  # fmt: skip
             if err:
                 return page("Access requests", f'<div class="flash">{esc(err)}</div>', "admin", 400)

@@ -238,7 +238,7 @@ def test_access_request_flow(site):
     site.login(ADMIN)
     site.logout()
     site.login("parent@example.com")
-    r = site.post("/request", {"team": "varsity", "role": "parent", "players": "Elm", "note": "hi"})
+    r = site.post("/request", {"teams": "varsity", "role": "parent", "players": "Elm", "note": "hi"})
     assert r.status_code == 302
     reqs = site.db.list_requests(status="pending")
     assert len(reqs) == 1 and reqs[0]["email"] == "parent@example.com" and reqs[0]["team"] == "varsity"
@@ -247,7 +247,7 @@ def test_access_request_flow(site):
     assert msg["To"] == ADMIN and "parent@example.com" in msg.get_content()
     assert not any(n in msg.get_content() for t in TEAMS.values() for n in t.values())
     # one pending request at a time
-    site.post("/request", {"team": "jv", "role": "parent", "players": "Birch"})
+    site.post("/request", {"teams": "jv", "role": "parent", "players": "Birch"})
     assert len(site.db.list_requests(email="parent@example.com")) == 1
     # admin approves with a chosen player of the team asked about
     site.logout()
@@ -266,7 +266,7 @@ def test_access_request_flow(site):
 def test_approval_keeps_other_team_access(site):
     site.db.put_user("both@example.com", dict(role="parent", players=[41], active=True))  # JV, saved before teams
     site.login("both@example.com")
-    site.post("/request", {"team": "varsity", "role": "parent", "players": "Fir"})
+    site.post("/request", {"teams": "varsity", "role": "parent", "players": "Fir"})
     site.logout()
     site.login(ADMIN)
     rid = site.db.list_requests(status="pending")[0]["id"]
@@ -280,7 +280,7 @@ def test_denied_request_gives_no_access_and_rate_limit(site):
     site.logout()
     site.login("someone@example.com")
     for i in range(4):
-        site.post("/request", {"team": "jv", "role": "coach", "note": str(i)})
+        site.post("/request", {"teams": "jv", "role": "coach", "note": str(i)})
         for r in site.db.list_requests(status="pending"):
             site.db.update_request(r["id"], {"status": "denied"})
     assert len(site.db.list_requests(email="someone@example.com")) == 3  # 3 per day
@@ -290,7 +290,7 @@ def test_denied_request_gives_no_access_and_rate_limit(site):
 
 def test_request_needs_a_published_team(site):
     site.login("someone@example.com")
-    site.post("/request", {"team": "nope", "role": "coach"})
+    site.post("/request", {"teams": "nope", "role": "coach"})
     assert site.db.list_requests(email="someone@example.com") == []
 
 
@@ -372,7 +372,7 @@ def test_requester_emailed_on_decision(site):
     site.logout()
     for who in ["yes@example.com", "no@example.com"]:
         site.login(who)
-        site.post("/request", {"team": "jv", "role": "parent", "players": "Alder"})
+        site.post("/request", {"teams": "jv", "role": "parent", "players": "Alder"})
         site.logout()
     site.login(ADMIN)
     site.mail.clear()
@@ -420,3 +420,44 @@ def test_one_game_team_menu_matches_the_page(site):
     player = site.client.get(f"{VA}/players/44")
     assert player.status_code == 200 and on.findall(text(player))[-1] == "Players"
     assert on.findall(text(site.client.get(f"{VA}/games/{GAMES[0]}")))[-1] == "Games"
+
+
+def test_request_for_several_teams_approved_per_team(site):
+    site.login("both@example.com")
+    site.post("/request", {"teams": ["jv", "varsity"], "role": "parent", "players": "Alder (JV), Elm (Varsity)"})
+    r = site.db.list_requests(status="pending")[0]
+    assert r["teams"] == ["jv", "varsity"]
+    site.logout()
+    site.login(ADMIN)
+    page = text(site.client.get("/admin/requests"))
+    assert "<legend>JV</legend>" in page and "<legend>Varsity</legend>" in page
+    site.post(f"/admin/requests/{r['id']}", {"decision": "approve", "role_jv": "parent", "players_jv": ["41"],
+                                             "role_varsity": "parent", "players_varsity": ["51"]})  # fmt: skip
+    assert site.db.get_user("both@example.com")["teams"] == {
+        "jv": {"role": "parent", "players": [41]}, "varsity": {"role": "parent", "players": [51]}}  # fmt: skip
+
+
+def test_approve_only_some_requested_teams(site):
+    site.login("one@example.com")
+    site.post("/request", {"teams": ["jv", "varsity"], "role": "coach"})
+    r = site.db.list_requests(status="pending")[0]
+    site.logout()
+    site.login(ADMIN)
+    # nothing chosen for either team: refused, the request stays pending
+    assert site.post(f"/admin/requests/{r['id']}", {"decision": "approve"}).status_code == 400
+    assert site.db.get_request(r["id"])["status"] == "pending"
+    site.post(f"/admin/requests/{r['id']}", {"decision": "approve", "role_varsity": "coach"})  # JV left at no access
+    assert site.db.get_user("one@example.com")["teams"] == {"varsity": {"role": "coach", "players": []}}
+
+
+def test_member_can_ask_for_another_team(site):
+    site.db.put_user("parent@example.com", dict(role="parent", players=[41], active=True))  # JV parent
+    site.login("parent@example.com")
+    assert 'href="/request"' in text(site.client.get(f"{JV}/"))  # the header link
+    page = text(site.client.get("/request"))
+    assert "(you have access)" in page and "You can see this site already" in page
+    site.post("/request", {"teams": ["varsity"], "role": "parent", "players": "Fir"})
+    assert site.db.list_requests(email="parent@example.com")[0]["teams"] == ["varsity"]
+    site.logout()
+    site.login(ADMIN)
+    assert 'href="/request"' not in text(site.client.get(f"{JV}/"))  # admins see everything already
