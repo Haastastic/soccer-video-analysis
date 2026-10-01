@@ -83,9 +83,11 @@ def document(title: str, body: str, nonce: str, header: str = "", site_name: str
     )
 
 
-def sign_out(email: str, csrf: str) -> str:
+def sign_out(email: str, csrf: str, ask: bool = False) -> str:
+    """ask: show a link to the access-request page (members who may want another team or more players)."""
+    link = '<a href="/request">Request access</a>' if ask else ""
     return (
-        f'<div class="me"><span>{esc(email)}</span>'
+        f'<div class="me">{link}<span>{esc(email)}</span>'
         '<button id="theme" type="button" title="Light or dark">◐</button>'
         f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{esc(csrf)}">'
         "<button>Sign out</button></form></div>"
@@ -139,7 +141,7 @@ def header(
     home = f"{base}/" if base else "/"
     return (
         f'<header class="top"><div class="in"><a class="brand" href="{home}">{logo}{esc(name)}</a>{switch}'
-        f'<nav class="main">{nav}</nav>{sign_out(user["email"], csrf)}</div></header>'
+        f'<nav class="main">{nav}</nav>{sign_out(user["email"], csrf, ask=not admin)}</div></header>'
     )
 
 
