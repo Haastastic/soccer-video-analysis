@@ -319,7 +319,7 @@ def kits_like(pilot: Path, ref_game: str) -> dict:
         d, role = min((float(np.linalg.norm(np.array(c) - pc)), r) for pc, r in protos)
         members = lab.index[lab == k]
         share = rows.reindex(members).fillna(0).sum() / max(total, 1)
-        if d <= KIT_MATCH:
+        if d <= KIT_MATCH and (role != "target" or share >= KIT_TEAM_ROWS):  # our team is never a sliver of the rows
             out[k] = role
         elif share >= KIT_TEAM_ROWS:
             out[k] = "opponent"

@@ -653,6 +653,15 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   of the time). `new_game.py setup --kits-like <game>` maps clusters by colour against a previous game of the same
   team in the same kit: near our kit -> target, near its other roles -> that role, else a cluster with 10%+ of the
   rows -> opponent, else other. Reproduces the owner's 9/3 mapping on both 9/3 pilots.
+  On the new games it was not enough: 9/3 was at night under lights, 9/5 and 9/16 start in daylight, so the white
+  kit moved past the cut (distance 21 vs 18) and the setup stopped safely; once (9/16 first half) it called a 5%
+  sliver cluster ours, now refused (our team must hold 10%+ of the rows). Reads with the original reader did not
+  decide either: on 9/16 the green-and-black hoops read 72% Varsity numbers (only 32 reads) and white 46%; on 9/5
+  white's most read numbers were JV ones (16, 1, 7, 27), so that recording may not show the Varsity game at all.
+  Left for the owner: which kit was ours. The GPU-heavy stages (detection, ball model, pitch mask) ran for every
+  window meanwhile, so setup/run finish fast once the kits are mapped.
+- Recordings of 9/5 and 9/16 (owner's videos): 9/5 holds about 12 min of play at its start, then an empty pitch for
+  2 h; 9/16 a full game, halves estimated 0:23-1:09 and 1:17-2:18 (halftime 1:09-1:17 clear in the crowd counts).
 - Night pitch fit: 50-99% of 2 s frames fixed per window (daylight 89-100%). A camera refit from this game's fixed
   frames moved the centre 3 cm and changed nothing (62 -> 62, 50 -> 49, 59 -> 60%): the lines are fainter, not
   the camera elsewhere. Rejected frames score a median of about 1300 against the 2000 cut, and wrong locks scored up
