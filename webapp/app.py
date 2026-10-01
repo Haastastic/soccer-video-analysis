@@ -477,8 +477,10 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
     @app.get("/t/<team>/")
     @team_member
     def season(team, rel):
-        if len(rel.order) == 1:
-            return redirect(url_for("game", team=team, gid=rel.order[0]))
+        if len(rel.order) == 1:  # one game: its page is the season, shown here so the menu still says Season
+            gid = rel.order[0]
+            return render.game_page(f"/t/{team}", rel, gid, shell_for("season", team), visible(team),
+                                    photo_ok_for(team, rel), game_meta(team, gid))  # fmt: skip
         return render.season_page(f"/t/{team}", rel, shell_for("season", team), visible(team), photo_ok_for(team, rel))
 
     @app.get("/t/<team>/games")
@@ -516,8 +518,10 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
     def player(team, rel, jersey):
         if not can_view(team, jersey):
             abort(403)
-        if len(rel.order) == 1:
-            return redirect(url_for("game_player", team=team, gid=rel.order[0], jersey=jersey))
+        if len(rel.order) == 1:  # one game: that game's player page, with the menu on Players
+            out = render.game_player_page(f"/t/{team}", rel, rel.order[0], jersey, shell_for("players", team),
+                                          photo_ok_for(team, rel))  # fmt: skip
+            return out if out is not None else abort(404)
         out = render.season_player_page(f"/t/{team}", rel, jersey, shell_for("players", team), photo_ok_for(team, rel))
         return out if out is not None else abort(404)
 

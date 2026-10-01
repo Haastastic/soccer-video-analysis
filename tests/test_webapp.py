@@ -184,7 +184,7 @@ def test_varsity_parent_same_number_other_team(site):
                                             teams={"varsity": {"role": "parent", "players": [44]}}))  # fmt: skip
     site.login("vp@example.com")
     assert site.client.get("/").headers["Location"].endswith(f"{VA}/")
-    assert site.client.get(f"{VA}/players/44").status_code in (200, 302)  # one game: to that game's page
+    assert site.client.get(f"{VA}/players/44").status_code == 200  # one game: that game's player page
     assert TEAMS["varsity"][44] in text(site.client.get(f"{VA}/games/{GAMES[0]}/players/44"))
     assert site.client.get(f"{VA}/photo/44").data == b"\xff\xd8varsity44"
     assert site.client.get(f"{VA}/players/51").status_code == 403
@@ -408,3 +408,15 @@ def test_team_switch_keeps_the_section(site):
     assert f'href="{VA}/players"' in text(site.client.get(f"{JV}/players"))
     assert f'href="{VA}/players"' in text(site.client.get(f"{JV}/players/41"))
     assert f'href="{VA}/"' in text(site.client.get(f"{JV}/"))
+
+
+def test_one_game_team_menu_matches_the_page(site):
+    """Varsity has one game: its season and player pages are that game's, with the menu on Season / Players."""
+    site.login(ADMIN)
+    on = re.compile(r'<a href="[^"]*" class=on>([A-Za-z]+)')
+    season = site.client.get(f"{VA}/")
+    assert season.status_code == 200 and on.findall(text(season))[-1] == "Season"
+    assert TEAMS["varsity"][51] in text(season)
+    player = site.client.get(f"{VA}/players/44")
+    assert player.status_code == 200 and on.findall(text(player))[-1] == "Players"
+    assert on.findall(text(site.client.get(f"{VA}/games/{GAMES[0]}")))[-1] == "Games"
