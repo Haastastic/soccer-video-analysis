@@ -5,10 +5,12 @@ The coaching pages (coaching_tips.py) for invited Google accounts, on Google Clo
 - **Roles.** An admin sees everything and manages people. A coach sees every player. A parent sees team numbers and only the players an admin ticked for them.
 - **Signing in.** Any Google account can sign in, but an account that is not a user yet only sees a "Request access" form. Each request notifies the admins: an in-app count, plus an email when SMTP is set up. When an admin approves or denies a request, the requester gets an email saying which.
 - **First admin.** `ADMIN_EMAIL` becomes the first admin the first time that account signs in, as long as no admin exists yet.
-- **Where things are stored.** Pages are rendered per request from data in a private bucket. Users, requests, the school and opponent names, and the logos live in Firestore. No names, logos or photos are in git.
+- **Where things are stored.** Pages are rendered per request from data in a private bucket. Users, requests, the school and opponent names, and the logos live in Firestore. No names, logos, photos or clips are in git.
+- **Clips.** Each player page has short clips (10 s, no sound, cropped to follow the player, a marker over them) of the player's moments: longest stretches on camera, fastest running, longest possessions and touches. `site_export.py` cuts them with `site_clips.py` into `data/site_clips/` (once; about 3 s each) and lists them in each game's `clips.json`. They sit in the bucket under `clips/<team>/<game>/`, outside the releases: `publish_site.py` sends only new ones and deletes ones no longer listed. The site serves a clip only to someone allowed to see that player.
 
 ```
 pipeline (local) -> site_export.py -> data/site_export/ --+
+   site_clips.py -> data/site_clips/<team>/<game>/*.mp4 --+
 player_photo.py -> data/site_photos/player_NN.jpg --------+-> publish_site.py -> private bucket -> Cloud Run app
                                                                                    Firestore (users, logos) --^
 ```

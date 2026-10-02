@@ -76,6 +76,14 @@ def write_release(root: Path) -> None:
     (rel / "jv" / "photos" / "player_41.jpg").write_bytes(b"\xff\xd8photo41")
     (rel / "jv" / "photos" / "player_42.jpg").write_bytes(b"\xff\xd8photo42")
     (rel / "varsity" / "photos" / "player_44.jpg").write_bytes(b"\xff\xd8varsity44")
+    # clips (site_clips.py) live outside the releases; each game's clips.json names them
+    clips = {"41": [["Longest on camera", [[100.0, "20 s", "41_100000.mp4"]]]],
+             "42": [["On the ball", [[200.0, "touch", "42_200000.mp4"]]]]}  # fmt: skip
+    (rel / "jv" / "games" / GAMES[0] / "clips.json").write_text(json.dumps(clips))
+    for name in ["41_100000.mp4", "42_200000.mp4", "43_300000.mp4"]:  # 43's is in the bucket but not named
+        f = root / "clips" / "jv" / GAMES[0] / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(name.encode() * 100)
     (rel / "teams.json").write_text(json.dumps({"teams": ["jv", "varsity"]}))
     (root / "current.json").write_text(json.dumps({"release": "releases/r1"}))
 
@@ -530,3 +538,29 @@ def test_season_game_list_names_the_opponent(site):
     html = site.client.get(f"{JV}/").get_data(as_text=True)
     assert f'vs <img class="crest sm" src="{JV}/logo/game/{GAMES[0]}" alt="">Lake Ridge' in html
     assert "</a> vs Northfield JV" in html  # no logo: the name alone
+
+
+def test_clips_only_for_players_the_viewer_may_see(site):
+    clip41, clip42, clip43 = (f"{JV}/clip/{GAMES[0]}/{n}" for n in ["41_100000.mp4", "42_200000.mp4", "43_300000.mp4"])
+    assert site.client.get(clip41).status_code == 302  # signed out: to the sign-in
+    site.login("stranger@example.com")
+    assert site.client.get(clip41).status_code == 403
+    site.logout()
+    site.db.put_user("parent@example.com", dict(role="member", admin=False, active=True,
+                                                teams={"jv": {"role": "parent", "players": [41]}}))  # fmt: skip
+    site.login("parent@example.com")
+    r = site.client.get(clip41)
+    assert r.status_code == 200 and r.mimetype == "video/mp4" and r.data.startswith(b"41_100000.mp4")
+    r = site.client.get(clip41, headers={"Range": "bytes=0-9"})
+    assert r.status_code == 206 and r.data == b"41_100000."
+    assert site.client.get(clip42).status_code == 403
+    page = text(site.client.get(f"{JV}/games/{GAMES[0]}/players/41"))
+    assert clip41 in page and "42_200000" not in page and 'id="watch"' in page
+    assert re.search(r'<script nonce="[^"]+">\s*const watch', page)  # the buttons' script runs under the CSP
+    assert clip41 in text(site.client.get(f"{JV}/players/41"))  # the season page has the game's clips too
+    assert 'id="watch"' not in text(site.client.get(f"{JV}/games/{GAMES[1]}/players/41"))  # no clips that game
+    site.logout()
+    site.login(ADMIN)
+    assert site.client.get(clip42).status_code == 200
+    assert site.client.get(clip43).status_code == 404  # in the bucket, but no release names it
+    assert site.client.get(f"{JV}/clip/{GAMES[0]}/..%2Fx.mp4").status_code == 404

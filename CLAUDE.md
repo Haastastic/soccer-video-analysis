@@ -11,6 +11,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   a chosen photo leave this computer only through publish_site.py (allow-listed files) into a private bucket, served
   by Cloud Run to invited Google accounts (admin / coach / parent-of-listed-players). Consent is the owner's, handled
   offline. School and opponent names and logos are entered in the site's admin page (Firestore), never in git.
+  WIDENED (owner decision, 2026-10-02): the site also carries short clips (10 s, no audio, cropped to follow one of
+  our players, site_clips.py) of each player's moments, served only to viewers allowed to see that player. Full
+  game videos never leave this computer.
 - Every stage writes its output to disk so any stage can be rerun and scored on its own.
 - Every stat carries a confidence value and a visibility percentage. Low-confidence events go to a review queue.
 - Be direct. Outline format with real detail. No filler.
@@ -733,6 +736,13 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   ankles sit 9% of box height above the box bottom (sd 2.6%). Noise floor on still people 17.8 -> 20.5 m/min
   (worse), player median 76.9 -> 78.6 m/min. Keypoint jitter on 60 to 90 px players exceeds the box bottom's. Not
   adopted (scratch script only; the pose weights in the repo root are git-ignored).
+- Site clips (owner's choice of four options, 2026-10-02: short clips of our players, not whole videos or links):
+  site_clips.py cuts each "Watch on video" moment into a 10 s clip, 960x540 at native resolution following the
+  player (identified boxes, 1 s smoothing), a white triangle over the player where an identified box is within
+  0.2 s, no audio; about 3.5 s and 0.5 to 0.9 MB each. Cut once into data/site_clips/<team>/<game>/; site_export.py
+  writes clips.json per game; publish_site.py uploads them outside the releases (clips/<team>/<game>/, only new
+  ones, deletes unnamed ones); the site serves /t/<team>/clip/<game>/<NN>_<ms>.mp4 only to viewers allowed to see
+  #NN and only names its release lists (Range requests answered for iPhone Safari). Privacy page updated.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)

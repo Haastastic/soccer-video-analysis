@@ -55,3 +55,26 @@ def test_set_opponents_keeps_admin_values(tmp_path, monkeypatch):
     kept = db.get_game("jv_2026-01-09")
     assert kept["opponent"] == "Set by an admin" and "logo" in kept  # only missing fields are filled
     assert db.get_game("jv_2026-01-16") == {}  # no video known: untouched
+
+
+def test_clip_files_only_named_clips(tmp_path, monkeypatch):
+    """Clips go only by name from the export's clips.json, and a name off the pattern stops the upload."""
+    import json
+
+    import pytest
+
+    import site_clips
+
+    export, clips = tmp_path / "export", tmp_path / "clips"
+    monkeypatch.setattr(p, "EXPORT", export)
+    monkeypatch.setattr(site_clips, "CLIPS", clips)
+    d = export / "jv" / "games" / "2026-01-02"
+    d.mkdir(parents=True)
+    (clips / "jv" / "2026-01-02").mkdir(parents=True)
+    for name in ["41_100000.mp4", "42_5.mp4"]:
+        (clips / "jv" / "2026-01-02" / name).write_bytes(b"x")
+    (d / "clips.json").write_text(json.dumps({"41": [["Longest", [[1.0, "a", "41_100000.mp4"]]]]}))
+    assert [path for path, _ in p.clip_files()] == ["clips/jv/2026-01-02/41_100000.mp4"]  # 42's is not named
+    (d / "clips.json").write_text(json.dumps({"41": [["Longest", [[1.0, "a", "../../secret.mp4"]]]]}))
+    with pytest.raises(SystemExit):
+        p.clip_files()

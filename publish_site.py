@@ -3,8 +3,12 @@
 Uploads data/site_export/<team>/ (site_export.py) and each team's chosen photos (player_photo.py:
 data/site_photos/player_NN.jpg for the first team, data/site_photos/<team>/ for others) as a new release under
 releases/<UTC stamp>/<team>/ with teams.json, then points current.json at it, so the site never shows half an upload.
-Only those files are sent, by an allow-list of names; nothing else under data/ (video, crops, caches, candidate
+Only those files are sent, by an allow-list of names; nothing else under data/ (full video, crops, caches, candidate
 photos) can go. Lists everything first and asks before uploading. Keeps the newest KEEP releases.
+
+Short clips of each player's moments (site_clips.py, owner decision 2026-10-02) live outside the releases, under
+clips/<team>/<game>/<NN>_<ms>.mp4: only the clips the export's clips.json files name are sent, only those not in the
+bucket yet, and clips no longer named are deleted after the release is live.
 
 After the upload, games with no opponent set on the site get one from their video's file name ("... vs <opponent>
 <date>.mp4"), and its logo if the video's folder holds "<school> Logo.png/.jpg/.jfif" whose name starts the
@@ -36,10 +40,12 @@ KEEP = 3
 TEAM_RE = r"[a-z0-9_-]+"
 FILE_RE = re.compile(  # the allow-list: paths inside a release (teams.json, then each team's folder)
     r"^(teams\.json|" + TEAM_RE + r"/(manifest\.json|season/(metrics\.csv|meds\.csv|tagged\.json)"
-    r"|games/[A-Za-z0-9_-]+/(metrics\.csv|meds\.csv|tips\.json|samples\.csv\.gz)"
+    r"|games/[A-Za-z0-9_-]+/(metrics\.csv|meds\.csv|tips\.json|samples\.csv\.gz|clips\.json)"
     r"|photos/player_\d{2}\.jpg))$"
 )
-MIME = {".json": "application/json", ".csv": "text/csv", ".gz": "application/gzip", ".jpg": "image/jpeg"}
+CLIP_RE = re.compile(r"^clips/" + TEAM_RE + r"/[A-Za-z0-9_-]+/\d{2}_\d+\.mp4$")  # outside the releases
+MIME = {".json": "application/json", ".csv": "text/csv", ".gz": "application/gzip", ".jpg": "image/jpeg",
+        ".mp4": "video/mp4"}  # fmt: skip
 
 
 def release_files() -> list:
@@ -59,6 +65,23 @@ def release_files() -> list:
     if bad:
         raise SystemExit(f"Refusing unexpected files: {bad}")
     return out
+
+
+def clip_files() -> list:
+    """(bucket path, local file) of every clip the export's clips.json files name; refuses anything else."""
+    from site_clips import CLIPS
+
+    out = []
+    for index in sorted(EXPORT.glob("*/games/*/clips.json")):
+        team, gid = index.parts[-4], index.parts[-2]
+        for groups in json.loads(index.read_text()).values():
+            for _, items in groups:
+                for _, _, name in items:
+                    path, f = f"clips/{team}/{gid}/{name}", CLIPS / team / gid / name
+                    if not CLIP_RE.match(path) or not f.is_file():
+                        raise SystemExit(f"Refusing clip {path} (bad name or missing locally)")
+                    out.append((path, f))
+    return sorted(set(out))
 
 
 LOGO_EXT = (".png", ".jpg", ".jpeg", ".jfif")
@@ -161,6 +184,12 @@ class GcsTarget:
         for b in self.bucket.list_blobs(prefix=f"releases/{stamp}/"):
             b.delete()
 
+    def clips(self) -> set:
+        return {b.name for b in self.bucket.list_blobs(prefix="clips/")}
+
+    def delete(self, path: str) -> None:
+        self.bucket.blob(path).delete()
+
 
 class LocalTarget:
     def __init__(self, root: Path):
@@ -178,6 +207,13 @@ class LocalTarget:
     def delete_release(self, stamp: str) -> None:
         shutil.rmtree(self.root / "releases" / stamp)
 
+    def clips(self) -> set:
+        d = self.root / "clips"
+        return {p.relative_to(self.root).as_posix() for p in d.rglob("*.mp4")} if d.exists() else set()
+
+    def delete(self, path: str) -> None:
+        (self.root / path).unlink(missing_ok=True)
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -190,6 +226,7 @@ def main() -> None:
     ap.add_argument("--db-file", type=Path, help="with --local-dir: the local site's DB_FILE, to set opponents there")
     args = ap.parse_args()
     files = release_files()
+    clips = clip_files()
     total = sum(f.stat().st_size for _, f in files)
     photos = sum("/photos/" in p for p, _ in files)
     teams = sorted({p.split("/")[0] for p, _ in files})
@@ -199,7 +236,11 @@ def main() -> None:
     target_name = args.bucket or args.local_dir
     print(f"{len(files)} files, {total / 1e6:.1f} MB: teams {teams}, {len(games)} game(s), {photos} photos -> "
           f"{target_name}")  # fmt: skip
-    print("These pages name minors and show their photos; they go to the private bucket behind sign-in only.")
+    print(
+        f"{len(clips)} clips, {sum(f.stat().st_size for _, f in clips) / 1e6:.0f} MB (only those not in the bucket "
+        "yet are sent)"
+    )
+    print("These pages name minors and show their photos and clips; they go to the private bucket behind sign-in only.")
     if args.dry_run:
         return
     if not args.yes and input("Upload? [y/N] ").strip().lower() != "y":
@@ -207,12 +248,23 @@ def main() -> None:
         return
     target = GcsTarget(args.bucket) if args.bucket else LocalTarget(args.local_dir)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    have = target.clips()
+    new = [(p, f) for p, f in clips if p not in have]
+    for i, (p, f) in enumerate(new, 1):  # before the release that names them goes live
+        target.put(p, f.read_bytes(), MIME[".mp4"])
+        if i % 100 == 0:
+            print(f"  {i} of {len(new)} new clips sent")
     for p, f in files:
         target.put(f"releases/{stamp}/{p}", f.read_bytes(), MIME.get(f.suffix, "application/octet-stream"))
     target.put(f"releases/{stamp}/teams.json", json.dumps({"teams": teams}).encode(), "application/json")
     target.put("current.json", json.dumps({"release": f"releases/{stamp}"}).encode(), "application/json")
     for old in target.releases()[:-KEEP]:
         target.delete_release(old)
+    named = {p for p, _ in clips}
+    gone = sorted(have - named)
+    for p in gone:
+        target.delete(p)
+    print(f"clips: {len(new)} sent, {len(named) - len(new)} already there, {len(gone)} no longer named deleted")
     print(f"published releases/{stamp}; the site picks it up within a minute")
     sys.path.insert(0, str(HERE / "webapp"))
     from db import FirestoreDB, MemoryDB

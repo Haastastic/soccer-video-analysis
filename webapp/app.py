@@ -38,7 +38,7 @@ import notify  # noqa: E402
 import render  # noqa: E402
 import ui  # noqa: E402
 from db import FirestoreDB, MemoryDB, norm_email  # noqa: E402
-from flask import Flask, abort, g, redirect, request, session, url_for  # noqa: E402
+from flask import Flask, abort, g, redirect, request, send_file, session, url_for  # noqa: E402
 from store import GcsStore, LocalStore, ReleaseCache  # noqa: E402
 from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: E402
 
@@ -185,7 +185,7 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
     @app.after_request
     def record_view(resp):
         # pages only (not photos, logos, icons or redirects), including pages refused or not found
-        image = "/photo/" in request.path or "/logo" in request.path  # also when missing (an HTML 404)
+        image = any(k in request.path for k in ("/photo/", "/logo", "/clip/"))  # also when missing (an HTML 404)
         if request.method == "GET" and resp.mimetype == "text/html" and not image and not 300 <= resp.status_code < 400:
             record("view", path=request.path, status=resp.status_code)
         return resp
@@ -293,7 +293,7 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
             if not session.get("email"):
                 return redirect(url_for("login", next=request.full_path.rstrip("?")))
             if g.user is None:
-                if "/photo/" in request.path or "/logo" in request.path:
+                if any(k in request.path for k in ("/photo/", "/logo", "/clip/")):
                     abort(403)
                 return redirect(url_for("access_request"))
             return fn(*a, **kw)
@@ -579,6 +579,22 @@ maxlength="{REQUEST_TEXT_MAX}"></label>
         if not can_view(team, jersey):
             abort(403)
         return image(rel.photo(jersey), "image/jpeg")
+
+    @app.get("/t/<team>/clip/<gid>/<name>")
+    @team_member
+    def clip(team, rel, gid, name):
+        m = re.fullmatch(r"(\d{2})_\d+\.mp4", name)
+        if not m or gid not in rel.games:
+            abort(404)
+        if not can_view(team, int(m.group(1))):
+            abort(403)
+        data = rel.clip(gid, name)
+        if not data:
+            abort(404)
+        # conditional: answers Range requests (206), which iPhone Safari needs to play video
+        resp = send_file(BytesIO(data), mimetype="video/mp4", conditional=True, max_age=300)
+        resp.headers["Cache-Control"] = "private, max-age=300"
+        return resp
 
     @app.get("/t/<team>/logo")
     @team_member

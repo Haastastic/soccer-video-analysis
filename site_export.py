@@ -10,9 +10,12 @@ One folder per team (data/site_export/<team>/, team from each game's game.local.
   data/site_export/<team>/season/tagged.json     observations tagged by game (coaching_tips.tag_tips)
   data/site_export/<team>/games/<id>/metrics.csv that game's metrics; meds.csv, tips.json the same for that game
   data/site_export/<team>/games/<id>/samples.csv.gz  identified positions (jersey, from_goal, y_team) for the heatmaps
+  data/site_export/<team>/games/<id>/clips.json  each player's moments and their clip names (site_clips.py; the clips
+                                                 themselves stay in data/site_clips/ until publish_site.py sends them)
 
 It holds names of minors (from roster.csv) and stays under data/ (git-ignored) until publish_site.py uploads it to
-the private bucket. No video, crops or detections are exported; photos are chosen separately (player_photo.py).
+the private bucket. No full video, crops or detections are exported: short clips of each player's moments are cut by
+site_clips.py (owner decision 2026-10-02); photos are chosen separately (player_photo.py).
 
 Example:
   python site_export.py --runs data\\clipA,...,data\\g0922\\w0000,...
@@ -27,6 +30,7 @@ from pathlib import Path
 import pandas as pd
 
 import coaching_tips as ct
+import site_clips
 from sv_common import DATA_DIR, game_dir, require_under_data
 
 OUT = DATA_DIR / "site_export"
@@ -44,7 +48,7 @@ def with_confidence(m: pd.DataFrame) -> pd.DataFrame:
     return m.assign(conf=[ct.confidence(x) for x in m.minutes])
 
 
-def export(gs: list, out: Path | None = None) -> None:
+def export(gs: list, out: Path | None = None, cut_clips: bool = True) -> None:
     """One team's games into out (default OUT/<team>): other teams' exports are left alone."""
     gs = sorted(gs, key=lambda g: g["label"])
     out = out or OUT / gs[0]["team"]
@@ -70,6 +74,7 @@ def export(gs: list, out: Path | None = None) -> None:
         (d / "tips.json").write_text(json.dumps(tips, indent=1))
         smp = g["s"][["jersey", "from_goal", "y_team"]]  # unrounded: the heatmap bins must match the local pages
         smp.to_csv(d / "samples.csv.gz", index=False)
+        (d / "clips.json").write_text(json.dumps(site_clips.game_clips(g, cut_clips), indent=1))
         games.append(dict(id=k, label=k, n_windows=len(g["runs"]), length=g["length"], width=g["width"]))
     s = pd.concat([g["s"] for g in gs], ignore_index=True)
     ev = pd.concat([g["ev"] for g in gs], ignore_index=True)
@@ -93,6 +98,7 @@ def export(gs: list, out: Path | None = None) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", required=True, help="comma list of window folders with identity (one or more games)")
+    ap.add_argument("--no-clips", action="store_true", help="list only clips already cut (cutting takes a while)")
     args = ap.parse_args()
     by_game = {}
     for r in args.runs.split(","):
@@ -103,7 +109,7 @@ def main() -> None:
         tg = [g for g in gs if g["team"] == team]
         if len({g["label"] for g in tg}) != len(tg):
             raise SystemExit('two games share a label: give each game.local.json a "video" name with its date')
-        export(tg)
+        export(tg, cut_clips=not args.no_clips)
 
 
 if __name__ == "__main__":
