@@ -63,11 +63,9 @@ def test_clip_files_only_named_clips(tmp_path, monkeypatch):
 
     import pytest
 
-    import site_clips
-
     export, clips = tmp_path / "export", tmp_path / "clips"
     monkeypatch.setattr(p, "EXPORT", export)
-    monkeypatch.setattr(site_clips, "CLIPS", clips)
+    monkeypatch.setattr(p, "CLIPS", clips)
     d = export / "jv" / "games" / "2026-01-02"
     d.mkdir(parents=True)
     (clips / "jv" / "2026-01-02").mkdir(parents=True)

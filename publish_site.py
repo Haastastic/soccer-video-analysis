@@ -35,6 +35,7 @@ from sv_common import DATA_DIR, DEFAULT_TEAM
 
 EXPORT = DATA_DIR / "site_export"
 PHOTOS = DATA_DIR / "site_photos"
+CLIPS = DATA_DIR / "site_clips"  # site_clips.py's folder (not imported: it needs the whole pipeline)
 HERE = Path(__file__).resolve().parent
 KEEP = 3
 TEAM_RE = r"[a-z0-9_-]+"
@@ -69,8 +70,6 @@ def release_files() -> list:
 
 def clip_files() -> list:
     """(bucket path, local file) of every clip the export's clips.json files name; refuses anything else."""
-    from site_clips import CLIPS
-
     out = []
     for index in sorted(EXPORT.glob("*/games/*/clips.json")):
         team, gid = index.parts[-4], index.parts[-2]
