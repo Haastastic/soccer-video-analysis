@@ -58,9 +58,10 @@ THEME_JS = """
 (function () {
   const root = document.documentElement;
   try { const t = localStorage.getItem('theme'); if (t) root.dataset.theme = t; } catch (e) {}
-  const b = document.getElementById('theme');
-  if (!b) return;
-  b.addEventListener('click', () => {
+  // this runs in <head> (so a saved theme applies before the page paints), before the button exists:
+  // listen on the document instead of looking the button up
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#theme')) return;
     const dark = root.dataset.theme ? root.dataset.theme === 'dark'
       : matchMedia('(prefers-color-scheme: dark)').matches;
     root.dataset.theme = dark ? 'light' : 'dark';
