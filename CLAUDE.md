@@ -643,8 +643,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   37-64% of target samples identified per window (JV games 34-55%), 204 identified player-minutes (202 in play).
 - Goalkeeper: found by place in only 2 windows. Tracks living in our box at night are classed unknown (16 of 19):
   the keeper's kit matches no mapped cluster and the track breaks into short pieces, under the rule's 40 samples.
-  FIXED in part (owner screenshot: a yellow and black kit): goalkeeper prototypes from the medians of the yellow
-  tracks living in our box (29 of 37 yellow tracks, all classed unknown or other before), one per half, and a track
+  FIXED in part (owner screenshot of the keeper's kit): goalkeeper prototypes from the medians of the tracks in that
+  kit colour living in our box (29 of 37 such tracks, all classed unknown or other before), one per half, and a track
   the colours call goalkeeper needs only 8 samples (about 4 s) for the place rule (GKP_MIN_SAMPLES_ROLE; the rule is
   only used for a team without labeled windows or a game without a keeper kit class, so games 1-3 are unaffected).
   Keeper identified 1.3 -> 1.9 min, 2 -> 5 windows; the keeper is on camera in our box only about 3.7 min all game.
@@ -653,21 +653,21 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   of the time). `new_game.py setup --kits-like <game>` maps clusters by colour against a previous game of the same
   team in the same kit: near our kit -> target, near its other roles -> that role, else a cluster with 10%+ of the
   rows -> opponent, else other. Reproduces the owner's 9/3 mapping on both 9/3 pilots.
-  On the new games it was not enough: 9/3 was at night under lights, 9/5 and 9/16 start in daylight, so the white
+  On the new games it was not enough: 9/3 was at night under lights, 9/5 and 9/16 start in daylight, so our 9/3
   kit moved past the cut (distance 21 vs 18) and the setup stopped safely; once (9/16 first half) it called a 5%
   sliver cluster ours, now refused (our team must hold 10%+ of the rows). Reads with the original reader did not
-  decide either: on 9/16 the green-and-black hoops read 72% Varsity numbers (only 32 reads) and white 46%; on 9/5
-  white's most read numbers were JV ones (16, 1, 7, 27), so that recording may not show the Varsity game at all.
+  decide either: on 9/16 one team's kit read 72% Varsity numbers (only 32 reads) and the other's 46%; on 9/5
+  the home kit's most read numbers were JV ones (16, 1, 7, 27), so that recording may not show the Varsity game at all.
   Left for the owner: which kit was ours. The GPU-heavy stages (detection, ball model, pitch mask) ran for every
   window meanwhile, so setup/run finish fast once the kits are mapped.
-- Varsity 9/16 (data/v0916): owner: Varsity wore green-and-black hoops (white opponents). Kick-off formation in the
+- Varsity 9/16 (data/v0916): owner mapped our kit (a different kit from 9/3). Kick-off formation in the
   first second-half window gave the goal end (X = 0 in the first half). Halves from the overview, then trimmed with
   the play check to 0:23-1:09 and 1:19-2:11. 20 windows with identity, about 286 identified player-minutes.
   Published. The last window (2:12-2:17) is after the final whistle: no reads at all, which crashed identity
   (empty reads table; fixed) and then coaching (no player_events.csv; fixed).
-- Varsity 9/5 (data/v0905): owner: Varsity wore white. Processed, 41 identified player-minutes over 12 min, NOT
-  published: the goal end came from a "kickoff" formation found at the end of the 12-minute segment, which is
-  probably after the final whistle, so it is unconfirmed (the yellow tracks are officials, not a keeper).
+- Varsity 9/5: ABANDONED (owner, 2026-10-02): the recording holds only the last 12 minutes of the game, too little
+  to use and with no way to confirm the goal end. Its processed data is set aside in data/_abandoned/v0905 (folders
+  starting with "_" are never picked up), and the owner removed the video.
 - Off-roster numbers: on our tracks, #16 (2961 reads on 9/5, 2031 on 9/16), #7 (997, 426), #10 and #45 (9/5) read
   as often as the top roster numbers, so players not on those games' rosters played (JV players playing up?).
   Identity only names roster numbers, so they stay unnamed until the owner adds them to the game rosters.
