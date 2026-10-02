@@ -599,6 +599,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   simplified play icon for 16-48 px, the full icon for 180-512 px.
 - `new_game.py publish --bucket <bucket>`: every game's windows -> site_export.py -> photo picker for players with no
   photo decision yet -> publish_site.py (asks before upload). One command per new game after `run`.
+- publish_site.py then fills each published game's MISSING opponent name (from the video name "... vs <opponent>
+  <date>.mp4", styled as the admins wrote theirs: "X JV", "X C", no "Varsity") and logo ("<school> Logo.<png|jpg|
+  jfif>" in the video's folder whose words start the opponent's) in Firestore; admin-set values are kept.
 - Phone width (390 px, Playwright + Edge on the local site): no page-level sideways scroll on any page; tables keep
   cells on one line and scroll inside their box.
 
