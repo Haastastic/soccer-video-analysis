@@ -665,9 +665,9 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   the play check to 0:23-1:09 and 1:19-2:11. 20 windows with identity, about 286 identified player-minutes.
   Published. The last window (2:12-2:17) is after the final whistle: no reads at all, which crashed identity
   (empty reads table; fixed) and then coaching (no player_events.csv; fixed).
-- Varsity 9/5 (data/v0905): owner: Varsity wore white. Processed, 41 identified player-minutes over 12 min, NOT
-  published: the goal end came from a "kickoff" formation found at the end of the 12-minute segment, which is
-  probably after the final whistle, so it is unconfirmed (the yellow tracks are officials, not a keeper).
+- Varsity 9/5: ABANDONED (owner, 2026-10-02): the recording holds only the last 12 minutes of the game, too little
+  to use and with no way to confirm the goal end. Its processed data is set aside in data/_abandoned/v0905 (folders
+  starting with "_" are never picked up), and the owner removed the video.
 - Off-roster numbers: on our tracks, #16 (2961 reads on 9/5, 2031 on 9/16), #7 (997, 426), #10 and #45 (9/5) read
   as often as the top roster numbers, so players not on those games' rosters played (JV players playing up?).
   Identity only names roster numbers, so they stay unnamed until the owner adds them to the game rosters.
