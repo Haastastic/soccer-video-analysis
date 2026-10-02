@@ -9,7 +9,11 @@ import json
 import threading
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+ACTIVITY_DAYS = 180  # activity entries expire after this (Firestore TTL on expire_at; trimmed in memory)
+ACTIVITY_MEMORY_MAX = 5000
 
 
 def norm_email(email: str) -> str:
@@ -22,9 +26,10 @@ class MemoryDB:
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else None
         self.lock = threading.Lock()
-        self.data = {"users": {}, "settings": {}, "games": {}, "requests": {}, "audit": []}
+        self.data = {"users": {}, "settings": {}, "games": {}, "requests": {}, "audit": [], "activity": []}
         if self.path and self.path.exists():
             self.data = json.loads(self.path.read_text(), object_hook=_decode)
+            self.data.setdefault("activity", [])  # files saved before the activity log
 
     def _save(self) -> None:
         if self.path:
@@ -94,6 +99,19 @@ class MemoryDB:
 
     def list_audit(self, limit: int = 100) -> list:
         return list(reversed(self.data["audit"][-limit:]))
+
+    def log_activity(self, entry: dict) -> None:
+        with self.lock:
+            log = self.data["activity"]
+            log.append(dict(entry, at=time.time()))
+            cutoff = time.time() - ACTIVITY_DAYS * 86400
+            while log and (log[0]["at"] < cutoff or len(log) > ACTIVITY_MEMORY_MAX):
+                log.pop(0)
+            self._save()
+
+    def list_activity(self, since: float, limit: int = 2000) -> list:
+        """Newest first, at or after since (epoch seconds)."""
+        return [dict(e) for e in reversed(self.data["activity"]) if e["at"] >= since][:limit]
 
 
 def _encode(o):
@@ -174,3 +192,13 @@ class FirestoreDB:
     def list_audit(self, limit: int = 100) -> list:
         q = self.db.collection("audit").order_by("at", direction=self.fs.Query.DESCENDING).limit(limit)
         return [d.to_dict() for d in q.stream()]
+
+    def log_activity(self, entry: dict) -> None:
+        # expire_at drives the collection's TTL policy (webapp/README.md); a single-field query needs no index
+        expire = datetime.now(UTC) + timedelta(days=ACTIVITY_DAYS)
+        self.db.collection("activity").add(dict(entry, at=time.time(), expire_at=expire))
+
+    def list_activity(self, since: float, limit: int = 2000) -> list:
+        q = (self.db.collection("activity").where(filter=self.fs.FieldFilter("at", ">=", since))
+             .order_by("at", direction=self.fs.Query.DESCENDING).limit(limit))  # fmt: skip
+        return [{k: v for k, v in d.to_dict().items() if k != "expire_at"} for d in q.stream()]

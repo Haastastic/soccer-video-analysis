@@ -23,10 +23,11 @@ import re
 import secrets
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 from io import BytesIO
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
 for p in (HERE, HERE.parent):  # coaching_html.py sits beside this in the container, one level up in the repo
@@ -51,6 +52,10 @@ SESSION_HOURS = 12
 TEAM_ROLES = ("coach", "parent")
 LEGACY_TEAM = "jv"  # users, settings and games saved before there were teams belong to the first team
 TEAM_LABELS = {"jv": "JV", "varsity": "Varsity"}  # until an admin sets a team's name
+ACTIVITY_SPANS = (1, 7, 30, 90, 180)  # days the admin activity page can show (entries are kept 180 days)
+ACTIVITY_LOAD = 3000  # newest entries read for that page
+ACTIVITY_SHOWN = 300  # events listed
+SITE_TZ = ZoneInfo(os.environ.get("SITE_TZ", "America/Chicago"))  # times on the activity page
 
 
 def is_admin(u: dict | None) -> bool:
@@ -166,6 +171,24 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
             sent = request.form.get("csrf", "")
             if not sent or not secrets.compare_digest(sent, session.get("csrf", "")):
                 abort(400, "The form expired. Go back, reload the page and try again.")
+
+    def record(action: str, **detail) -> None:
+        """One line of the activity log for the signed-in person; never lets logging break a page."""
+        email = session.get("email")
+        if not email:
+            return
+        try:
+            db.log_activity(dict(email=email, action=action, access=g.get("user") is not None, **detail))
+        except Exception:  # noqa: BLE001 - the log is a convenience, the page is not
+            app.logger.exception("activity log")
+
+    @app.after_request
+    def record_view(resp):
+        # pages only (not photos, logos, icons or redirects), including pages refused or not found
+        image = "/photo/" in request.path or "/logo" in request.path  # also when missing (an HTML 404)
+        if request.method == "GET" and resp.mimetype == "text/html" and not image and not 300 <= resp.status_code < 400:
+            record("view", path=request.path, status=resp.status_code)
+        return resp
 
     @app.after_request
     def headers(resp):
@@ -317,6 +340,9 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
             db.put_user(admin, dict(role="admin", admin=True, teams={}, active=True, invited_by="bootstrap",
                                     created=time.time()))  # fmt: skip
             db.audit(admin, "bootstrap_admin", {})
+        u = db.get_user(email)
+        g.user = u if u and u.get("active", True) and (is_admin(u) or grants(u)) else None
+        record("sign_in")
 
     @app.get("/login")
     def login():
@@ -366,6 +392,7 @@ def create_app(db=None, store=None, send_mail=None, config: dict | None = None) 
 
     @app.post("/logout")
     def logout():
+        record("sign_out")
         session.clear()
         return redirect(url_for("login"))
 
@@ -495,7 +522,9 @@ maxlength="{REQUEST_TEXT_MAX}"></label>
             gid = rel.order[0]
             return render.game_page(f"/t/{team}", rel, gid, shell_for("season", team), visible(team),
                                     photo_ok_for(team, rel), game_meta(team, gid))  # fmt: skip
-        return render.season_page(f"/t/{team}", rel, shell_for("season", team), visible(team), photo_ok_for(team, rel))
+        meta = {k: game_meta(team, k) for k in rel.order}
+        return render.season_page(f"/t/{team}", rel, shell_for("season", team), visible(team),
+                                  photo_ok_for(team, rel), meta)  # fmt: skip
 
     @app.get("/t/<team>/games")
     @team_member
@@ -674,7 +703,8 @@ maxlength="{REQUEST_TEXT_MAX}"></label>
             )
         n_pending = pending_count()
         body = f"""<h1>Admin</h1>
-<p><a class="btn{" primary" if n_pending else ""}" href="/admin/requests">Access requests ({n_pending} waiting)</a></p>
+<p><a class="btn{" primary" if n_pending else ""}" href="/admin/requests">Access requests ({n_pending} waiting)</a>
+<a class="btn" href="/admin/activity">Activity</a></p>
 <h2>People</h2>
 <p class="sub">Per team: coaches see every player; parents see team numbers and only the players ticked for them.
 Admins see every team.</p>
@@ -761,6 +791,122 @@ Admins see every team.</p>
         db.audit(g.user["email"], "save_game", {"team": team, "game": gid, "opponent": meta["opponent"],
                                                 "logo": bool(logo)})  # fmt: skip
         return redirect(url_for("admin"))
+
+    def local_time(ts: float, fmt: str = "%b %d, %H:%M") -> str:
+        return datetime.fromtimestamp(ts, SITE_TZ).strftime(fmt)
+
+    def describe(path: str) -> str:
+        """A page path as an admin reads it: team, page, game and player names."""
+        m = re.fullmatch(r"/t/([^/]+)/(.*)", path)
+        if not m:
+            fixed = {"/": "Home", "/request": "Access request form", "/privacy": "Privacy", "/admin": "Admin",
+                     "/admin/requests": "Admin: access requests", "/admin/activity": "Admin: activity"}  # fmt: skip
+            return fixed.get(path, path)
+        team, rest = m.groups()
+        names = dict(roster(team))
+
+        def who(j: str) -> str:
+            return f"#{j} {names.get(int(j), '')}".strip()
+
+        def vs(gid: str) -> str:
+            opp = game_meta(team, gid).get("opponent")
+            return f"{gid} vs {opp}" if opp else gid
+
+        parts = [x for x in rest.split("/") if x]
+        if not parts:
+            what = "Season"
+        elif parts in (["games"], ["players"]):
+            what = parts[0].capitalize()
+        elif len(parts) == 2 and parts[0] == "players" and parts[1].isdigit():
+            what = f"Player {who(parts[1])}"
+        elif len(parts) == 2 and parts[0] == "games":
+            what = f"Game {vs(parts[1])}"
+        elif len(parts) == 4 and parts[0] == "games" and parts[2] == "players" and parts[3].isdigit():
+            what = f"Game {vs(parts[1])}: {who(parts[3])}"
+        else:
+            what = "/".join(parts)
+        return f"{team_label(team)}: {what}"
+
+    def event_text(e: dict) -> str:
+        if e["action"] == "sign_in":
+            return "Signed in" + ("" if e.get("access") else " (no access yet)")
+        if e["action"] == "sign_out":
+            return "Signed out"
+        text = esc(describe(e.get("path", "")))
+        status = e.get("status", 200)
+        if status == 403:
+            return f"{text} <span class='muted'>(refused)</span>"
+        if status >= 400:
+            return f"{text} <span class='muted'>({status})</span>"
+        return text
+
+    @app.get("/admin/activity")
+    @admin_only
+    def admin_activity():
+        days = request.args.get("days", 30, type=int)
+        days = days if days in ACTIVITY_SPANS else 30
+        only = norm_email(request.args.get("email", ""))
+        events = db.list_activity(time.time() - days * 86400, ACTIVITY_LOAD)
+        partial = len(events) >= ACTIVITY_LOAD
+        people = {u["email"]: u for u in db.list_users()}
+        per = {}
+        for e in events:
+            p = per.setdefault(e["email"], dict(last=0.0, sign_ins=0, views=0, days=set()))
+            p["last"] = max(p["last"], e["at"])
+            p["sign_ins"] += e["action"] == "sign_in"
+            p["views"] += e["action"] == "view"
+            p["days"].add(local_time(e["at"], "%Y-%m-%d"))
+        emails = sorted(set(people) | set(per), key=lambda m: (-per.get(m, {}).get("last", 0.0), m))
+        rows = []
+        for m in emails:
+            p = per.get(m)
+            u = people.get(m)
+            access = sees(u) if u and u.get("active", True) else ("access off" if u else "no access")
+            link = f'<a href="/admin/activity?days={days}&amp;email={esc(m)}">{esc(m)}</a>'
+            if p:
+                rows.append(f"<tr><td>{link}</td><td>{esc(access)}</td><td>{local_time(p['last'])}</td>"
+                            f"<td>{len(p['days'])}</td><td>{p['sign_ins']}</td><td>{p['views']}</td></tr>")  # fmt: skip
+            else:
+                rows.append(f"<tr><td>{esc(m)}</td><td>{esc(access)}</td><td class='muted'>not in this period</td>"
+                            "<td>0</td><td>0</td><td>0</td></tr>")  # fmt: skip
+        shown = [e for e in events if not only or e["email"] == only]
+        ev_rows = "".join(
+            f"<tr><td>{local_time(e['at'])}</td><td>{esc(e['email'])}</td><td>{event_text(e)}</td></tr>"
+            for e in shown[:ACTIVITY_SHOWN]
+        )
+        audit = db.list_audit(200)
+        changes = [a for a in audit if not only or a.get("actor") == only or only in str(a.get("detail"))]
+        ch_rows = "".join(
+            f"<tr><td>{local_time(a['at'])}</td><td>{esc(a.get('actor', ''))}</td><td>{esc(a['action'])}</td>"
+            f"<td>{esc(', '.join(f'{k}: {v}' for k, v in (a.get('detail') or {}).items()))}</td></tr>"
+            for a in changes[:100]
+        )
+        span = "".join(
+            f'<option value="{d}"{" selected" if d == days else ""}>last {d} day{"s" if d > 1 else ""}</option>'
+            for d in ACTIVITY_SPANS
+        )
+        pick = '<option value="">everyone</option>' + "".join(
+            f"<option{' selected' if m == only else ''}>{esc(m)}</option>" for m in emails
+        )
+        note = f" Only the newest {ACTIVITY_LOAD} entries are counted." if partial else ""
+        more = f", the first {ACTIVITY_SHOWN} shown" if len(shown) > ACTIVITY_SHOWN else ""
+        body = f"""<h1>Activity</h1>
+<p class="sub">Sign-ins and pages opened by signed-in people (not photos or logos), kept {ACTIVITY_SPANS[-1]} days.
+Times are {esc(SITE_TZ.key)}.{note}</p>
+<form method="get" action="/admin/activity" class="stack"><label>Period<select name="days">{span}</select></label>
+<label>Person<select name="email">{pick}</select></label><button>Show</button></form>
+<h2>People</h2>
+<div class="wrap"><table class="admin"><tr><th>Email</th><th>Sees</th><th>Last seen</th><th>Days active</th>
+<th>Sign-ins</th><th>Pages</th></tr>{"".join(rows)}</table></div>
+<h2>{"Events: " + esc(only) if only else "Events"}</h2>
+<p class="sub">Newest first ({len(shown)}{more}).</p>
+<div class="wrap"><table class="admin"><tr><th>When</th><th>Who</th><th>What</th></tr>
+{ev_rows or "<tr><td colspan=3 class=muted>Nothing in this period.</td></tr>"}</table></div>
+<h2>Admin changes</h2>
+<div class="wrap"><table class="admin"><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr>
+{ch_rows or "<tr><td colspan=4 class=muted>None.</td></tr>"}</table></div>
+<p><a href="/admin">Back to admin</a></p>"""
+        return page("Activity", body, "admin")
 
     @app.get("/admin/requests")
     @admin_only
