@@ -1,3 +1,4 @@
 # tests of the coaching site (tests/); synthetic data only
 -r webapp/requirements.txt
 pytest
+opencv-python-headless  # publish_site.py imports sv_common (tests/test_publish_opponents.py)
