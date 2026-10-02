@@ -728,6 +728,11 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   stretches on camera, the fastest running (4 m/s or more) and the longest possessions and touches, 5 each, 15 s
   apart; a click plays the game video (relative link from the page, so only on this computer) from 3 s before.
   Checked in Edge: the video seeks to the moment. The player is not marked in the video.
+- Tried: feet from pose keypoints (yolo11m-pose on each tracklet crop, midpoint of the ankles, lower ankle's height)
+  instead of the box's bottom centre, clipE, same tracks and calibration. Both ankles confident on 96% of rows;
+  ankles sit 9% of box height above the box bottom (sd 2.6%). Noise floor on still people 17.8 -> 20.5 m/min
+  (worse), player median 76.9 -> 78.6 m/min. Keypoint jitter on 60 to 90 px players exceeds the box bottom's. Not
+  adopted (scratch script only; the pose weights in the repo root are git-ignored).
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
