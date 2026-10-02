@@ -38,7 +38,9 @@ Examples:
 
 import argparse
 import json
+import os
 import re
+import urllib.parse
 from pathlib import Path
 
 import numpy as np
@@ -90,6 +92,7 @@ def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
     ident = identity_rows(run, xy)
     d = smooth_steps(ident[play_mask(run, ident.ci)], fps)  # time outside the game's halves is not play
     d["t_min"] = start_min + d.ci / cache.fps / 60
+    d["video_s"] = d.t_min * 60
     second = d.t_min > game["halftime_min"]
     first_goal = float(game["first_half_our_goal_x"])
     toward = 1.0 if first_goal < length / 2 else -1.0  # +1: our first-half goal at X = 0
@@ -122,13 +125,14 @@ def window_events(run: Path) -> pd.DataFrame:
     """Touches and possessions of identified players (player_stats.py's player_events.csv), every confidence."""
     path = run / "player_events.csv"
     if not path.exists():  # nobody identified in the window (e.g. after the final whistle): no events
-        return pd.DataFrame(columns=["run", "jersey", "type", "time_s", "dur_s", "confidence"])
+        return pd.DataFrame(columns=["run", "jersey", "type", "time_s", "dur_s", "confidence", "video_s"])
     ev = pd.read_csv(path)
     ev = ev[ev.type.isin(["touch", "possession"]) & ev.jersey.notna() & play_mask(run, ev.ci)].copy()
     ev["jersey"] = ev.jersey.astype(int)
     ev["dur_s"] = np.where(ev.type == "possession", ev.end_s - ev.time_s, 0.0)
     ev["run"] = run.name
-    return ev[["run", "jersey", "type", "time_s", "dur_s", "confidence"]]
+    ev["video_s"] = parse_time(json.loads((run / "cache" / "meta.json").read_text())["clip_start"]) + ev.time_s
+    return ev[["run", "jersey", "type", "time_s", "dur_s", "confidence", "video_s"]]
 
 
 def game_label(folder: Path, game: dict) -> str:
@@ -161,7 +165,60 @@ def load_game(runs: list) -> dict:
         ev=ev,
         team=team_of(runs[0]),
         roster=read_roster(team_of(runs[0]), runs[0]),
+        video=game.get("video"),
     )
+
+
+WATCH_N, WATCH_GAP_S, WATCH_LEAD_S = 5, 15.0, 3.0  # moments per list, at least this far apart, played from before
+
+
+def spaced(t: np.ndarray, order: np.ndarray) -> list:
+    """Indices in priority order, skipping any within WATCH_GAP_S of one already taken, up to WATCH_N."""
+    taken = []
+    for i in order:
+        if all(abs(t[i] - t[j]) >= WATCH_GAP_S for j in taken):
+            taken.append(i)
+            if len(taken) == WATCH_N:
+                break
+    return sorted(taken, key=lambda i: t[i])
+
+
+def player_moments(g: dict, jersey) -> list:
+    return watch_moments(g["s"][g["s"].jersey == jersey], g["ev"][g["ev"].jersey == jersey])
+
+
+def watch_moments(s: pd.DataFrame, ev: pd.DataFrame) -> list:
+    """One player's moments in one game to check on video: the longest stretches on camera, the fastest running and
+    the longest possessions and touches. Each is (video seconds to start at, caption)."""
+    groups = []
+    if len(s):
+        q = s.sort_values(["run", "track_id", "part", "video_s"])
+        new = (q.run != q.run.shift()) | (q.track_id != q.track_id.shift()) | (q.part != q.part.shift())
+        new |= q.video_s.diff() > 1.0
+        st = q.groupby(new.cumsum()).video_s.agg(["min", "max"])
+        st = st.assign(dur=st["max"] - st["min"])
+        st = st[st.dur >= 10].reset_index(drop=True)
+        t, dur = st["min"].to_numpy(), st.dur.to_numpy()
+        groups.append(("Longest on camera", [(t[i], f"{dur[i]:.0f} s") for i in spaced(t, np.argsort(-dur))]))
+        f = s[(s.speed >= SPEED_BANDS["run"][0]) & (s.speed <= MAX_SPEED_MPS)].reset_index(drop=True)
+        t, v = f.video_s.to_numpy(), f.speed.to_numpy()
+        fast = [(t[i] - WATCH_LEAD_S, f"{v[i]:.1f} m/s") for i in spaced(t, np.argsort(-v))]
+        groups.append(("Fastest running", fast))
+    if len(ev):
+        e = ev.reset_index(drop=True)
+        t = e.video_s.to_numpy()
+        prio = np.lexsort((-e.confidence.to_numpy(), -e.dur_s.to_numpy()))  # longest possessions, then touches
+        cap = np.where(e.type == "possession", [f"has it {d:.1f} s" for d in e.dur_s], "touch")
+        groups.append(("On the ball", [(t[i] - WATCH_LEAD_S, cap[i]) for i in spaced(t, prio)]))
+    return groups
+
+
+def video_href(video, page_dir: Path) -> str | None:
+    """The game video relative to a page (local pages only), or None when it is not on this computer."""
+    if not video or not (DATA_DIR.parent / video).exists():
+        return None
+    rel = os.path.relpath(DATA_DIR.parent / video, page_dir)
+    return urllib.parse.quote(rel.replace(os.sep, "/"))
 
 
 def pooled_roster(gs: list) -> pd.DataFrame:
@@ -528,8 +585,18 @@ def single_game(g: dict) -> None:
         tips, med = tips_med[r.jersey]
         tip_counts[r.jersey] = len(tips)
         (out / f"player_{r.jersey:02d}.md").write_text(report(r, tips, len(runs)), encoding="utf-8")
+        href = video_href(g["video"], out)
+        watch = coaching_html.watch_section({g["label"]: (href, player_moments(g, r.jersey))} if href else {})
         page = coaching_html.player_page(
-            r, tips, med, s[s.jersey == r.jersey], g["length"], g["width"], len(runs), confidence(r.minutes)
+            r,
+            tips,
+            med,
+            s[s.jersey == r.jersey],
+            g["length"],
+            g["width"],
+            len(runs),
+            confidence(r.minutes),
+            watch=watch,
         )
         (out / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
         lines.append(
@@ -618,7 +685,14 @@ def multi_game(gs: list, share_dir: Path | None = None) -> None:
         tagged_all[r.jersey] = tagged
         meds = {k: tm[k][r.jersey][1] for k in ["Pooled", *rows]}
         samples = {g["label"]: (g["s"][g["s"].jersey == r.jersey], g["length"], g["width"]) for g in gs}
-        page = coaching_html.multi_player_page(r, rows, meds, tagged, samples, confidence(r.minutes))
+        watch = coaching_html.watch_section(
+            {
+                g["label"]: (href, player_moments(g, r.jersey))
+                for g in gs
+                if g["label"] in rows and (href := video_href(g["video"], out))
+            }
+        )
+        page = coaching_html.multi_player_page(r, rows, meds, tagged, samples, confidence(r.minutes), watch=watch)
         (out / f"player_{r.jersey:02d}.html").write_text(page, encoding="utf-8")
         seen = ", ".join(f"{k}: {q.minutes:.1f} min" for k, q in rows.items())
         summary += [f"## {name_of(r)} (#{r.jersey}), {r.role}", f"{seen}; pooled {r.minutes:.1f} min"]

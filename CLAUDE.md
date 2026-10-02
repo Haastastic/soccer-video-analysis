@@ -668,7 +668,8 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   team in the same kit: near our kit -> target, near its other roles -> that role, else a cluster with 10%+ of the
   rows -> opponent, else other. Reproduces the owner's 9/3 mapping on both 9/3 pilots.
   On the new games it was not enough: 9/3 was at night under lights, 9/5 and 9/16 start in daylight, so our 9/3
-  kit moved past the cut (distance 21 vs 18) and the setup stopped safely; once (9/16 first half) it called a 5%
+  kit moved past the cut (distance 21 vs 18) and the setup stopped safely (CORRECTED, Phase 24: 9/16 was a
+  different kit, not the light); once (9/16 first half) it called a 5%
   sliver cluster ours, now refused (our team must hold 10%+ of the rows). Reads with the original reader did not
   decide either: on 9/16 one team's kit read 72% Varsity numbers (only 32 reads) and the other's 46%; on 9/5
   the home kit's most read numbers were JV ones (16, 1, 7, 27), so that recording may not show the Varsity game at all.
@@ -707,6 +708,26 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   whole GPU (two units, detection one). (3) One failed window stopped the queue; failures are now reported at the end
   and the other windows finish. (4) A team the reader has not learned skips identity in `run` (team_ready) and goes
   straight to the seed round. (5) Background tasks stop after 2 h: a whole-game run is started as its own process.
+
+## Phase 24: an outside review checked against the findings (2026-10-02)
+- The owner asked for an evaluation of an outside AI review of the pipeline. Already done in the code: per-sample
+  fatigue phases (coaching_tips.phase), pitch width from the camera file, Lab torso/legs on non-grass pixels,
+  comparison within roles. Contradicted by earlier measurements: touches from ball velocity changes (Phase 12: 11%
+  recall), a physics/carry ball filter (Phase 22), a multi-frame ball detector (Phase 22: misses are balls hidden at
+  feet), formation priors for linking (Phases 8, 15). Not possible with a panning camera that shows part of the
+  pitch: pitch control, line compactness, rest defense (they also need passes and turnovers, both unreliable).
+- Tried: matching kits across games with lightness down-weighted (data from every pilot; truth = the owner's
+  mappings, recovered as the pilot cluster centres stored in each game's prototypes). JV 9/16 <-> 9/22 (same kit):
+  full Lab 4 of 4 right, our kit 1.8 to 6.7 times nearer than the next big cluster; weight 0.25: 1.1 to 2.4;
+  colour only (a*b*): 3 of 4. Lightness separates our kit from others, so dropping it only shrinks the margin. Not
+  adopted. Varsity 9/3 <-> 9/16 fails with any weight because the kits differ (refusing is right). No same-kit pair
+  under different light exists yet (9/18 Varsity will be the first). g1001 (JV 10/1, mapped by colour, no owner
+  check) has thin margins (1.2 to 1.3) and 4 to 6 opponents per frame with 2 to 5 "other": an opponent cluster may
+  sit in other/official; worth an owner look at its kit_clusters.png before publishing.
+- Added: "Watch on video" on local player pages (single game and across games, never the site): the longest
+  stretches on camera, the fastest running (4 m/s or more) and the longest possessions and touches, 5 each, 15 s
+  apart; a click plays the game video (relative link from the page, so only on this computer) from 3 s before.
+  Checked in Edge: the video seeks to the moment. The player is not marked in the video.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
