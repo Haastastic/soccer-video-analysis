@@ -187,14 +187,16 @@ WATCH_JS = """
 <script>
 const watch = document.getElementById('watch');
 let want = null;  // the latest moment clicked; a video still loading seeks to it once it can
-watch.addEventListener('loadedmetadata', () => { if (want !== null) watch.currentTime = want; });
-document.addEventListener('click', e => {
-  const b = e.target.closest('button[data-t]'); if (!b) return;
-  want = +b.dataset.t;
-  if (watch.getAttribute('src') !== b.dataset.src) watch.src = b.dataset.src;
-  else if (watch.readyState >= 1) watch.currentTime = want;
-  watch.play();
-});
+if (watch) {
+  watch.addEventListener('loadedmetadata', () => { if (want !== null) watch.currentTime = want; });
+  document.addEventListener('click', e => {
+    const b = e.target.closest('button[data-t]'); if (!b) return;
+    want = +b.dataset.t;
+    if (watch.getAttribute('src') !== b.dataset.src) watch.src = b.dataset.src;
+    else if (watch.readyState >= 1) watch.currentTime = want;
+    watch.play();
+  });
+}
 </script>
 """
 
@@ -204,30 +206,37 @@ def clock(s: float) -> str:
     return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
 
 
-def watch_section(games: dict) -> str:
-    """Local pages only: moments to check on the game video on this computer. games: label -> (video href relative
-    to the page, [(group title, [(video seconds to start at, caption)])]); one player for all of them. Empty when
-    there is nothing to show (no video on this computer, or no moments)."""
+def watch_section(games: dict, site: bool = False) -> str:
+    """Moments to watch, one player. games: label -> (video href or None, [(group title, [items])]). An item is
+    (video seconds, caption) on local pages, played in the game video on this computer from that time, or (video
+    seconds, caption, clip href) on the site, a short clip of that moment (site_clips.py) played from its start. The
+    site's document adds the script itself (with its CSP nonce). Empty when there is nothing to show."""
     blocks = []
     for label, (href, groups) in games.items():
-        rows = [
-            f'<h3>{esc(title)}</h3><p class="moments">'
-            + "".join(
-                f'<button data-src="{esc(href)}" data-t="{t:.1f}">{clock(t)} <small>{esc(cap)}</small></button>'
-                for t, cap in items
-            )
-            + "</p>"
-            for title, items in groups
-            if items
-        ]
+        rows = []
+        for title, items in groups:
+            buttons = []
+            for item in items:
+                t, cap = item[0], item[1]
+                src, seek = (item[2], 0.0) if len(item) > 2 else (href, t)
+                buttons.append(
+                    f'<button data-src="{esc(src)}" data-t="{seek:.1f}">{clock(t)} <small>{esc(cap)}</small></button>'
+                )
+            if buttons:
+                rows.append(f'<h3>{esc(title)}</h3><p class="moments">{"".join(buttons)}</p>')
         if rows:
             blocks.append((f'<h3 class="status">{esc(label)}</h3>' if len(games) > 1 else "") + "".join(rows))
     if not blocks:
         return ""
+    intro = (
+        "Short clips of the player's moments, the player marked with a white triangle. Times are the game video's."
+        if site
+        else "Moments from the game video on this computer; a click plays from a few seconds before. Times are the "
+        "video's own."
+    )
     return (
-        '<h2>Watch on video</h2><p class="sub">Moments from the game video on this computer; a click plays from a '
-        "few seconds before. Times are the video's own.</p>"
-        f'<video id="watch" controls preload="none"></video>{"".join(blocks)}{WATCH_JS}'
+        f'<h2>Watch on video</h2><p class="sub">{intro}</p>'
+        f'<video id="watch" controls playsinline preload="none"></video>{"".join(blocks)}' + ("" if site else WATCH_JS)
     )
 
 

@@ -73,6 +73,8 @@ THEME_JS = """
 
 def document(title: str, body: str, nonce: str, header: str = "", site_name: str = "Coaching") -> str:
     tooltip = ch.TOOLTIP_JS.replace("<script>", f'<script nonce="{nonce}">')
+    if 'id="watch"' in body:  # a player page with clips: its buttons' script, under the CSP nonce
+        tooltip += ch.WATCH_JS.replace("<script>", f'<script nonce="{nonce}">')
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">'
@@ -149,7 +151,7 @@ def header(
 
 NOTE = (
     '<p class="note">Automatic analysis of youth soccer video, shared privately with invited families and coaches. '
-    "Please do not copy or pass on names, photos or numbers.</p>"
+    "Please do not copy or pass on names, photos, clips or numbers.</p>"
 )
 
 
@@ -161,8 +163,9 @@ def privacy(contact: str) -> str:
 It is not a commercial service.</p>
 <h2>What the site shows</h2>
 <p>Automatic analysis of game video: how much each player runs, where they play, touches of the ball, observations
-for coaching, and one photo of each player cropped from the game video. Nothing is shown to anyone who has not
-been given access. Coaches see every player; parents and guardians see team totals and only their own child.</p>
+for coaching, one photo of each player cropped from the game video, and short clips (about 10 seconds, no sound) of
+each player's moments in a game. Nothing is shown to anyone who has not been given access. Coaches see every player;
+parents and guardians see team totals and only their own child, including their child's clips only.</p>
 <h2>What we keep about you</h2>
 <ul>
 <li>When you sign in with Google: your email address and name, used only to check what you may see.</li>
@@ -177,5 +180,5 @@ browser. No advertising, no third-party analytics, nothing that follows you to o
 <p>On Google Cloud in the United States, in private storage that only this site can read. It is never sold or given
 to anyone else; Google hosts it and provides the sign-in.</p>
 <h2>Removal</h2>
-<p>To have your account, a request, or a child's page or photo removed, contact {who}. Removal is done within
+<p>To have your account, a request, or a child's page, photo or clips removed, contact {who}. Removal is done within
 14 days.</p>"""

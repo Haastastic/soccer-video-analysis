@@ -4,7 +4,8 @@ bucket (or a local folder in development and tests).
 Layout (publish_site.py writes it): current.json -> {"release": "releases/<stamp>"}; under that prefix teams.json
 ({"teams": [...]}) and one folder per team with the files of data/site_export/<team>/ and photos/player_NN.jpg. A
 release is loaded once into memory and reloaded when current.json points somewhere new (checked at most every
-RELOAD_S seconds).
+RELOAD_S seconds). Clips of players' moments live outside the releases, under clips/<team>/<game>/<NN>_<ms>.mp4, and
+are read one at a time when asked for (each game's clips.json names them).
 """
 
 import io
@@ -53,6 +54,7 @@ class Release:
 
     def __init__(self, store, prefix: str):
         self.store, self.prefix = store, prefix.rstrip("/")
+        self.team = self.prefix.rsplit("/", 1)[-1]
         self.manifest = json.loads(self._read("manifest.json"))
         self.games = {g["id"]: g for g in self.manifest["games"]}
         self.order = sorted(self.games)  # labels are dates: date order
@@ -62,13 +64,15 @@ class Release:
         for t in self.tagged.values():
             for f in t:
                 f["evidence"] = [tuple(e) for e in f["evidence"]]
-        self.per, self.meds, self.tips, self.samples = {}, {}, {}, {}
+        self.per, self.meds, self.tips, self.samples, self.clips = {}, {}, {}, {}, {}
         for k in self.order:
             self.per[k] = _csv(self._read(f"games/{k}/metrics.csv"))
             self.meds[k] = _csv(self._read(f"games/{k}/meds.csv"))
             tips = json.loads(self._read(f"games/{k}/tips.json"))
             self.tips[k] = {int(j): [tuple(t) for t in v] for j, v in tips.items()}
             self.samples[k] = _csv(self._read(f"games/{k}/samples.csv.gz"), compression="gzip")
+            raw = self._read(f"games/{k}/clips.json")  # none in releases made before clips
+            self.clips[k] = {int(j): v for j, v in json.loads(raw).items()} if raw else {}
         self.photos = set()
         for j in self.season.jersey if len(self.season) else []:
             if self._read(self.photo_path(int(j))) is not None:
@@ -83,6 +87,11 @@ class Release:
 
     def photo(self, jersey: int) -> bytes | None:
         return self._read(self.photo_path(jersey)) if int(jersey) in self.photos else None
+
+    def clip(self, gid: str, name: str) -> bytes | None:
+        """A clip this release names for that game, else None (so no other path in the bucket can be asked for)."""
+        named = {n for groups in self.clips.get(gid, {}).values() for _, items in groups for *_, n in items}
+        return self.store.read(f"clips/{self.team}/{gid}/{name}") if name in named else None
 
     def players(self) -> pd.DataFrame:
         return self.season

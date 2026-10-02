@@ -26,6 +26,18 @@ def web_opts(base: str, shell, photo_ok, visible, back_url: str, player_url, int
     )
 
 
+def watch(base: str, rel: Release, jersey: int, gids: list) -> str:
+    """The player's clips (site_clips.py) in those games, as buttons over one video player."""
+    games = {}
+    for gid in gids:
+        groups = rel.clips.get(gid, {}).get(int(jersey), [])
+        if groups:
+            src = f"{base}/clip/{gid}/"
+            items = [(title, [(t, cap, src + name) for t, cap, name in rows]) for title, rows in groups]
+            games[rel.games[gid]["label"]] = (None, items)
+    return ch.watch_section(games, site=True)
+
+
 def game_title(rel: Release, gid: str, games_meta: dict) -> str:
     opp = games_meta.get(gid, {}).get("opponent")
     return f"{rel.games[gid]['label']} vs {opp}" if opp else rel.games[gid]["label"]
@@ -82,7 +94,7 @@ def game_player_page(base: str, rel: Release, gid: str, jersey: int, shell, phot
     med = rel.med(rel.meds[gid], jersey)
     return ch.player_page(
         r, rel.tips[gid].get(jersey, []), med, smp[smp.jersey == jersey], g["length"], g["width"],
-        g["n_windows"], r.conf, web,
+        g["n_windows"], r.conf, web, watch=watch(base, rel, jersey, [gid]),
     )  # fmt: skip
 
 
@@ -98,7 +110,8 @@ def season_player_page(base: str, rel: Release, jersey: int, shell, photo_ok) ->
         for k in rel.order
     }
     web = web_opts(base, shell, photo_ok, None, f"{base}/", lambda j: f"{base}/players/{j}")
-    return ch.multi_player_page(r, rows, meds, rel.tagged.get(jersey, []), samples, r.conf, web)
+    clips = watch(base, rel, jersey, [k for k in rel.order if k in rows])
+    return ch.multi_player_page(r, rows, meds, rel.tagged.get(jersey, []), samples, r.conf, web, watch=clips)
 
 
 def games_page(base: str, rel: Release, games_meta: dict, visible) -> str:
