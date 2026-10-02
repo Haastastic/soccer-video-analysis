@@ -195,7 +195,9 @@ def read_evidence(rows: pd.DataFrame, reads: pd.DataFrame, roster: np.ndarray) -
     ok = ok.assign(num=num[ok.index].astype(int))
     ok = ok[ok.track_id.isin(rows.track_id)].reset_index(drop=True)
     by = {t: (g.index.to_numpy(), g.ci.to_numpy()) for t, g in rows.groupby("track_id")}
-    ok["i"] = [by[t][0][np.abs(by[t][1] - c).argmin()] for t, c in zip(ok.track_id, ok.ci, strict=True)]
+    ok["i"] = np.array(
+        [by[t][0][np.abs(by[t][1] - c).argmin()] for t, c in zip(ok.track_id, ok.ci, strict=True)], dtype=int
+    )  # int even when empty: a window with no usable reads (after the final whistle) must not fail
     k = len(roster)
     lp = np.zeros((len(rows), k))
     miss, hit = np.log((1 - P_READ) / (k - 1)), np.log(P_READ)

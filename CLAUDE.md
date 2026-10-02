@@ -660,6 +660,17 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   white's most read numbers were JV ones (16, 1, 7, 27), so that recording may not show the Varsity game at all.
   Left for the owner: which kit was ours. The GPU-heavy stages (detection, ball model, pitch mask) ran for every
   window meanwhile, so setup/run finish fast once the kits are mapped.
+- Varsity 9/16 (data/v0916): owner: Varsity wore green-and-black hoops (white opponents). Kick-off formation in the
+  first second-half window gave the goal end (X = 0 in the first half). Halves from the overview, then trimmed with
+  the play check to 0:23-1:09 and 1:19-2:11. 20 windows with identity, about 286 identified player-minutes.
+  Published. The last window (2:12-2:17) is after the final whistle: no reads at all, which crashed identity
+  (empty reads table; fixed) and then coaching (no player_events.csv; fixed).
+- Varsity 9/5 (data/v0905): owner: Varsity wore white. Processed, 41 identified player-minutes over 12 min, NOT
+  published: the goal end came from a "kickoff" formation found at the end of the 12-minute segment, which is
+  probably after the final whistle, so it is unconfirmed (the yellow tracks are officials, not a keeper).
+- Off-roster numbers: on our tracks, #16 (2961 reads on 9/5, 2031 on 9/16), #7 (997, 426), #10 and #45 (9/5) read
+  as often as the top roster numbers, so players not on those games' rosters played (JV players playing up?).
+  Identity only names roster numbers, so they stay unnamed until the owner adds them to the game rosters.
 - Recordings of 9/5 and 9/16 (owner's videos): 9/5 holds about 12 min of play at its start, then an empty pitch for
   2 h; 9/16 a full game, halves estimated 0:23-1:09 and 1:17-2:18 (halftime 1:09-1:17 clear in the crowd counts).
 - Night pitch fit: 50-99% of 2 s frames fixed per window (daylight 89-100%). A camera refit from this game's fixed
