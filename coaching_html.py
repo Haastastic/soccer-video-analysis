@@ -77,6 +77,13 @@ h3.status { font-size: 15px; margin: 18px 0 8px; }
 #tip { position: fixed; pointer-events: none; background: var(--text-1); color: var(--surface); font-size: 13px;
   padding: 4px 8px; border-radius: 4px; display: none; z-index: 10; max-width: 260px; }
 .hit:hover { stroke: var(--text-1); stroke-width: 0.4; }
+video { width: 100%; max-height: 60vh; background: #000; border-radius: 8px; display: block; margin: 8px 0; }
+.moments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+.moments button { font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer;
+  color: var(--text-1); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 3px 8px; }
+.moments button:hover { border-color: var(--accent); }
+.moments button small { color: var(--text-3); }
 """
 
 TOOLTIP_JS = """
@@ -173,6 +180,54 @@ def filtered_note(web: Web | None, shown: int, total: int) -> str:
     return (
         f'<p class="filtered">Showing the {shown} player{"s" if shown != 1 else ""} you have access to; team '
         f"numbers include all {total}.</p>"
+    )
+
+
+WATCH_JS = """
+<script>
+const watch = document.getElementById('watch');
+let want = null;  // the latest moment clicked; a video still loading seeks to it once it can
+watch.addEventListener('loadedmetadata', () => { if (want !== null) watch.currentTime = want; });
+document.addEventListener('click', e => {
+  const b = e.target.closest('button[data-t]'); if (!b) return;
+  want = +b.dataset.t;
+  if (watch.getAttribute('src') !== b.dataset.src) watch.src = b.dataset.src;
+  else if (watch.readyState >= 1) watch.currentTime = want;
+  watch.play();
+});
+</script>
+"""
+
+
+def clock(s: float) -> str:
+    s = int(s)
+    return f"{s // 3600}:{s // 60 % 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def watch_section(games: dict) -> str:
+    """Local pages only: moments to check on the game video on this computer. games: label -> (video href relative
+    to the page, [(group title, [(video seconds to start at, caption)])]); one player for all of them. Empty when
+    there is nothing to show (no video on this computer, or no moments)."""
+    blocks = []
+    for label, (href, groups) in games.items():
+        rows = [
+            f'<h3>{esc(title)}</h3><p class="moments">'
+            + "".join(
+                f'<button data-src="{esc(href)}" data-t="{t:.1f}">{clock(t)} <small>{esc(cap)}</small></button>'
+                for t, cap in items
+            )
+            + "</p>"
+            for title, items in groups
+            if items
+        ]
+        if rows:
+            blocks.append((f'<h3 class="status">{esc(label)}</h3>' if len(games) > 1 else "") + "".join(rows))
+    if not blocks:
+        return ""
+    return (
+        '<h2>Watch on video</h2><p class="sub">Moments from the game video on this computer; a click plays from a '
+        "few seconds before. Times are the video's own.</p>"
+        f'<video id="watch" controls preload="none"></video>{"".join(blocks)}{WATCH_JS}'
     )
 
 
@@ -332,6 +387,7 @@ def player_page(
     n_windows: int,
     confidence: str,
     web: Web | None = None,
+    watch: str = "",
 ) -> str:
     name = r["name"] if isinstance(r["name"], str) else f"#{r.jersey}"
     role = r.role
@@ -408,6 +464,7 @@ whisker shows how far this could move by chance (±2 standard errors).</p>
 <details><summary>Table</summary><div class="wrap"><table>
 <tr><th>Part of the game</th><th class="n">Minutes seen</th><th class="n">× teammates</th>
 <th class="n">Windows</th></tr>{rows}</table></div></details>
+{watch}
 <p class="note">Unverified automatic analysis of movement and touches only: no passing, shooting or technique.
 Touches are the ball-event detector's (it finds about 6 in 10). Numbers are per visible minute; the panning camera
 and automatic identity see about a third to a half of each player's time. Check observations on
@@ -480,7 +537,14 @@ def fmt_value(v, fmt: str) -> str:
 
 
 def multi_player_page(
-    r: pd.Series, rows: dict, meds: dict, tagged: list, samples: dict, confidence: str, web: Web | None = None
+    r: pd.Series,
+    rows: dict,
+    meds: dict,
+    tagged: list,
+    samples: dict,
+    confidence: str,
+    web: Web | None = None,
+    watch: str = "",
 ) -> str:
     """One player across games. r: pooled metrics; rows: game label -> that game's metrics; meds: "Pooled" and game
     label -> the role's peer median; tagged: observations with status and evidence (coaching_tips.tag_tips);
@@ -566,6 +630,7 @@ median). The whisker is ±2 standard errors: points whose whiskers overlap are n
 <h2>Work rate through each game</h2>
 <p class="sub">Compared with identified teammates at the same time; the whisker is ±2 standard errors.</p>
 <div class="duo">{"".join(phases)}</div>
+{watch}
 <p class="note">Unverified automatic analysis of movement and touches only: no passing, shooting or technique.
 Touches are the ball-event detector's (it finds about 6 in 10, fewer where the ball detector struggles). The
 panning camera and automatic identity see about a third to a half of each player's time. Check observations on
