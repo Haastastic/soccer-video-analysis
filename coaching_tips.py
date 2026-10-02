@@ -120,7 +120,10 @@ def window_samples(run: Path, game: dict, length: float) -> pd.DataFrame:
 
 def window_events(run: Path) -> pd.DataFrame:
     """Touches and possessions of identified players (player_stats.py's player_events.csv), every confidence."""
-    ev = pd.read_csv(run / "player_events.csv")
+    path = run / "player_events.csv"
+    if not path.exists():  # nobody identified in the window (e.g. after the final whistle): no events
+        return pd.DataFrame(columns=["run", "jersey", "type", "time_s", "dur_s", "confidence"])
+    ev = pd.read_csv(path)
     ev = ev[ev.type.isin(["touch", "possession"]) & ev.jersey.notna() & play_mask(run, ev.ci)].copy()
     ev["jersey"] = ev.jersey.astype(int)
     ev["dur_s"] = np.where(ev.type == "possession", ev.end_s - ev.time_s, 0.0)
