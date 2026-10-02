@@ -38,8 +38,17 @@ def opponent_intro(base: str, gid: str, label: str, meta: dict) -> str:
     return f'<p class="match">{logo}<span><b>{vs}</b><br><span class="sub">{esc(label)}</span></span></p>'
 
 
-def season_page(base: str, rel: Release, shell, visible, photo_ok) -> str:
+def season_page(base: str, rel: Release, shell, visible, photo_ok, games_meta: dict | None = None) -> str:
     web = web_opts(base, shell, photo_ok, visible, f"{base}/", lambda j: f"{base}/players/{j}")
+    games_meta = games_meta or {}
+
+    def game_cell(label: str) -> str:
+        gid = next((k for k, g in rel.games.items() if g["label"] == label), label)
+        opp = games_meta.get(gid, {}).get("opponent")
+        vs = f" vs {esc(opp)}" if opp else ""
+        return f'<a href="{base}/games/{esc(gid)}">{esc(label)}</a>{vs}'
+
+    web.game_cell = game_cell
     per = rel.per
     return ch.multi_team_page(rel.season, per, rel.tagged, rel.order, web)
 

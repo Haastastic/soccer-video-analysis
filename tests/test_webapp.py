@@ -461,3 +461,64 @@ def test_member_can_ask_for_another_team(site):
     site.logout()
     site.login(ADMIN)
     assert 'href="/request"' not in text(site.client.get(f"{JV}/"))  # admins see everything already
+
+
+def test_activity_records_sign_ins_and_pages_not_images(site):
+    site.db.put_user("parent@example.com", dict(role="member", admin=False, active=True,
+                                                teams={"jv": {"role": "parent", "players": [41]}}))  # fmt: skip
+    site.login("parent@example.com")
+    site.client.get(f"{JV}/players/41")
+    site.client.get(f"{JV}/players/42")  # not theirs: refused, still recorded
+    site.client.get(f"{JV}/photo/41")  # images are not recorded
+    site.client.get(f"{JV}/logo/game/{GAMES[0]}")
+    site.logout()
+    site.client.get("/privacy")  # signed out: nothing recorded
+    log = list(reversed(site.db.list_activity(0)))
+    assert [(e["action"], e.get("path"), e.get("status")) for e in log] == [
+        ("sign_in", None, None),
+        ("view", f"{JV}/players/41", 200),
+        ("view", f"{JV}/players/42", 403),
+        ("sign_out", None, None),
+    ]
+    assert all(e["email"] == "parent@example.com" and e["access"] for e in log)
+
+
+def test_activity_page_admin_only_and_readable(site):
+    site.db.put_user("coach@example.com", dict(role="member", admin=False, active=True,
+                                               teams={"jv": {"role": "coach", "players": []}}))  # fmt: skip
+    site.login("stranger@example.com")  # no access: the sign-in says so
+    site.logout()
+    site.login("coach@example.com")
+    site.client.get(f"{JV}/games/{GAMES[0]}/players/42")
+    assert site.client.get("/admin/activity").status_code == 403
+    site.logout()
+    site.login(ADMIN)
+    site.db.put_user("never@example.com", dict(role="member", admin=False, active=True,
+                                               teams={"jv": {"role": "parent", "players": [43]}}))  # fmt: skip
+    html = site.client.get("/admin/activity").get_data(as_text=True)
+    assert "Signed in (no access yet)" in html and "stranger@example.com" in html
+    assert f"JV: Game {GAMES[0]}: #42 Birch Test" in html  # paths read as team, game and player
+    assert "never@example.com" in html and "not in this period" in html  # invited, never came
+    assert "bootstrap_admin" in html  # admin changes are listed too
+    one = site.client.get("/admin/activity?email=coach@example.com&days=7").get_data(as_text=True)
+    events = one.split("<h2>Events")[1].split("<h2>Admin changes")[0]
+    assert "#42 Birch Test" in events and "stranger@example.com" not in events
+    assert "/admin/activity" in site.client.get("/admin").get_data(as_text=True)
+
+
+def test_activity_log_failure_never_breaks_a_page(site, monkeypatch):
+    site.login(ADMIN)
+
+    def broken(entry):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(site.db, "log_activity", broken)
+    assert site.client.get(f"{JV}/players").status_code == 200
+
+
+def test_season_game_list_names_the_opponent(site):
+    site.login(ADMIN)
+    site.post(f"/admin/games/jv/{GAMES[1]}", {"opponent": "Northfield JV"})
+    html = site.client.get(f"{JV}/").get_data(as_text=True)
+    assert f'<a href="{JV}/games/{GAMES[1]}">{GAMES[1]}</a> vs Northfield JV' in html
+    assert f'<a href="{JV}/games/{GAMES[0]}">{GAMES[0]}</a></td>' in html  # no opponent set: the date alone

@@ -109,6 +109,7 @@ class Web:
     photo_url: Callable  # jersey -> href of the player's photo, or None
     visible: set | None = None
     intro: str = ""  # trusted HTML under a team page's heading (the game's opponent)
+    game_cell: Callable | None = None  # game label -> trusted HTML for the season page's game list (opponent, link)
 
     def shows(self, jersey) -> bool:
         return self.visible is None or int(jersey) in self.visible
@@ -693,7 +694,8 @@ def multi_team_page(m: pd.DataFrame, per: dict, tagged: dict, labels: list, web:
         return "–" if v is None else fmt.format(v)
 
     season = "".join(
-        f"<tr><td>{esc(s['game'])}</td><td class='n'>{s['players']}</td>"
+        f"<tr><td>{web.game_cell(s['game']) if web and web.game_cell else esc(s['game'])}</td>"
+        f"<td class='n'>{s['players']}</td>"
         f"<td class='n'>{s['identified_player_minutes']:.0f}</td>"
         f"<td class='n'>{cell(s['team_m_per_min'], '{:.0f}')}</td>"
         f"<td class='n'>{cell(s['touches_per_min'], '{:.2f}')}</td>"

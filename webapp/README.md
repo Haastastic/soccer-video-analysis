@@ -25,6 +25,8 @@ gcloud config set project PROJECT
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com `
     firestore.googleapis.com secretmanager.googleapis.com storage.googleapis.com
 gcloud firestore databases create --location=REGION
+# activity log entries expire after 180 days (expire_at, written by the app)
+gcloud firestore fields ttls update expire_at --collection-group=activity --enable-ttl
 
 # private bucket: uniform access, public access prevented
 gcloud storage buckets create gs://BUCKET --location=REGION --uniform-bucket-level-access --public-access-prevention
@@ -112,3 +114,4 @@ pytest -q tests                      # synthetic players only
 - **Images.** Photos and logos are only served after a permission check, never from public URLs. Uploaded logos are re-encoded as small PNGs.
 - **Access requests.** At most one request can be waiting per account, and at most 3 requests per day. The emails carry only an address, the outcome and a link, never player names or stats.
 - **Audit.** Every admin change and every request is written to the Firestore `audit` collection.
+- **Activity.** Sign-ins, sign-outs and every page a signed-in person opens (not photos or logos) go to the Firestore `activity` collection, kept 180 days (TTL on `expire_at`). Admins see it under Admin > Activity, with the admin changes from `audit`. Times are shown in `SITE_TZ` (default America/Chicago).

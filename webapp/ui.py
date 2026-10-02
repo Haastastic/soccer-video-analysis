@@ -166,8 +166,10 @@ been given access. Coaches see every player; parents and guardians see team tota
 <li>When you sign in with Google: your email address and name, used only to check what you may see.</li>
 <li>If you ask for access: what you typed in the request and when you sent it.</li>
 <li>A record of changes the administrators make (who was given access, and when).</li>
+<li>A record of when you sign in and which pages of this site you open, kept 180 days and seen only by the site's
+administrators, so they can see whether the pages are used.</li>
 <li>One session cookie while you are signed in (12 hours), and your light or dark theme choice in your own
-browser. No advertising, analytics or tracking.</li>
+browser. No advertising, no third-party analytics, nothing that follows you to other sites.</li>
 </ul>
 <h2>Where it is kept and who can see it</h2>
 <p>On Google Cloud in the United States, in private storage that only this site can read. It is never sold or given
