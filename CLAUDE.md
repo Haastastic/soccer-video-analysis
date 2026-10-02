@@ -604,6 +604,17 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   jfif>" in the video's folder whose words start the opponent's) in Firestore; admin-set values are kept.
 - Phone width (390 px, Playwright + Edge on the local site): no page-level sideways scroll on any page; tables keep
   cells on one line and scroll inside their box.
+- Opponents (2026-10-02, PR #111/#112): after an upload, publish_site.py fills each published game's MISSING
+  opponent name (from the video name "... vs <opponent> <date>.mp4", in the admins' style: "X JV", "X C", no
+  "Varsity") and logo ("<school> Logo.<png|jpg|jfif>" in the video's folder whose words start the opponent's) in
+  Firestore; admin-set values are kept.
+- Activity (PR #113): sign-ins, sign-outs and every page a signed-in person opens (not photos or logos; refused pages
+  included) go to Firestore `activity`, expiring after 180 days (TTL on expire_at, ACTIVE). Admin > Activity: per
+  person (invited people who never came included) last seen, days active, sign-ins, pages; events with readable page
+  names; the admin-change audit. Times in SITE_TZ (America/Chicago). The privacy page says so.
+- Season page (PR #113/#114): the game list shows each game's opponent logo and name and links to the game.
+- Theme button (PR #115): it never worked on the site (its script ran in <head> before the button existed); it now
+  listens on the document. Checked in Edge with both OS themes.
 
 ## Phase 22: ball recall, where the ball is lost (experiment, data/_ball_recall/, 2026-09-30)
 - Held out (game 2's w4840 / w0500 with the fold A / B venue models): of visible balls the linked path misses,
@@ -745,13 +756,15 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
-12. RESUME HERE (saved 2026-10-02 07:56): two teams (JV, Varsity) on the site; Phases 21-23 done. Running when
-   saved, as detached processes: (a) `new_game.py numbers --game v0916 --apply` (the owner confirmed #16 = a JV
-   player who played up, added to data/v0916/roster.csv only; reader retrained, 9/16 identity/stats/pages redone),
-   (b) after it, JV game 10/1 (data/g1001: setup --kits-like g0916, then run; halves 0:01-0:35 / 0:45-1:22,
-   estimated, owner OK'd). Next: upload 9/16 when (a) ends; finish g1001 (owner maps kits if --kits-like stops;
-   trim halves with the play check; check identity and goal end; upload). Open: a photo for Varsity #16. 9/5
-   Varsity abandoned (only the last 12 min recorded). Details of the session state: the memory resume point.
+12. RESUME HERE (saved 2026-10-02 09:45): two teams (JV, Varsity) on the site. Done this session: 9/16 Varsity
+   redone with #16 (a JV player who played up) and uploaded with his photo; site changes PRs #111-#115 (Phase 21
+   notes). Running when saved, as detached processes (they survive a restart): (a) JV 10/1 (data/g1001): setup done
+   (kits matched by colour to 9/16, pilot pitch 99%), `run` started 09:34; (b) then Varsity 9/18 vs a new opponent
+   (data/v0918, waits for (a)): setup --kits-like v0916, then run. Its halves are Claude's estimates from 30 s stills
+   (0:02:30-0:50:00, 1:00:00-1:49:30; the plan's proposal took the start of halftime for a water break). Next, for
+   each: trim halves with the play check (`confirm` keeps windows, rerun `run`), check identity per window and the
+   goal end, `new_game.py publish` (opponent and logo fill in automatically). 9/5 Varsity abandoned. Details of the
+   session state: the memory resume point.
 11. DONE, kept for history (saved 2026-09-30): THREE GAMES processed (data/ = game 1 2026-09-18, data/g0922 = game 2,
    data/g0916 = game 3), Phases 13 to 20 done, main clean at PR #92. Owner's list after game 3 (per-game jersey
    round, season view, goalkeeper without a keeper kit, event detection) is finished: the jersey round is optional
