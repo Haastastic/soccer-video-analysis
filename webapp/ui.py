@@ -33,6 +33,7 @@ main { max-width: 1040px; }
   padding: 12px 14px; color: var(--text-1); text-decoration: none; border: 1px solid transparent; }
 .card:hover { border-color: var(--accent); }
 .crest { width: 48px; height: 48px; object-fit: contain; flex: none; }
+.crest.sm { width: 24px; height: 24px; vertical-align: middle; margin: -4px 4px 0 2px; }
 .crest.blank { display: inline-flex; align-items: center; justify-content: center; background: var(--surface);
   border-radius: 50%; color: var(--text-3); font-size: 13px; }
 .match { display: flex; gap: 12px; align-items: center; margin: 6px 0 10px; }
