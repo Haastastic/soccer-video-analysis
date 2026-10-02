@@ -6,6 +6,11 @@ releases/<UTC stamp>/<team>/ with teams.json, then points current.json at it, so
 Only those files are sent, by an allow-list of names; nothing else under data/ (video, crops, caches, candidate
 photos) can go. Lists everything first and asks before uploading. Keeps the newest KEEP releases.
 
+After the upload, games with no opponent set on the site get one from their video's file name ("... vs <opponent>
+<date>.mp4"), and its logo if the video's folder holds "<school> Logo.png/.jpg/.jfif" whose name starts the
+opponent's (St. Elm JV -> "St Elm Logo.png"). Saved in the site's database (Firestore), like the admin page
+does; never in git. Anything an admin set already is kept.
+
 Needs: gcloud auth application-default login (the owner), and the bucket from webapp/README.md.
 
 Example:
@@ -18,6 +23,7 @@ import argparse
 import json
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -25,6 +31,7 @@ from sv_common import DATA_DIR, DEFAULT_TEAM
 
 EXPORT = DATA_DIR / "site_export"
 PHOTOS = DATA_DIR / "site_photos"
+HERE = Path(__file__).resolve().parent
 KEEP = 3
 TEAM_RE = r"[a-z0-9_-]+"
 FILE_RE = re.compile(  # the allow-list: paths inside a release (teams.json, then each team's folder)
@@ -52,6 +59,87 @@ def release_files() -> list:
     if bad:
         raise SystemExit(f"Refusing unexpected files: {bad}")
     return out
+
+
+LOGO_EXT = (".png", ".jpg", ".jpeg", ".jfif")
+LEVELS = {"jv", "varsity", "c", "b", "a", "freshman"}  # team-level words after a school name ("Lake Ridge-JV")
+
+
+def words(name: str) -> list:
+    return re.findall(r"[a-z0-9]+", name.lower().replace(".", ""))
+
+
+def opponent_from_video(video: str) -> str | None:
+    """ "<us> vs <opponent> <YYYY-MM-DD>.mp4" -> "<opponent>", written as the admins do: a space before the level
+    ("Lake Ridge-JV" -> "Lake Ridge JV"), no "Varsity"."""
+    m = re.search(r"\bvs\.?\s+(.+?)\s+\d{4}-\d{2}-\d{2}\s*$", Path(video).stem, re.I)
+    if not m:
+        return None
+    name = re.sub(r"\s*-\s*(?=[A-Za-z]+$)", " ", m.group(1).strip())
+    return re.sub(r"\s+varsity$", "", name, flags=re.I) or None
+
+
+def find_logo(folder: Path, opponent: str) -> Path | None:
+    """The "<school> Logo.<ext>" in folder whose school words start the opponent's (level words dropped); the
+    longest such school wins."""
+    opp = words(opponent)
+    while opp and opp[-1] in LEVELS:
+        opp.pop()
+    best = None
+    for f in folder.glob("*"):
+        if f.suffix.lower() not in LOGO_EXT or not f.stem.lower().endswith(" logo"):
+            continue
+        school = words(f.stem[: -len(" logo")])
+        if school and opp[: len(school)] == school and (best is None or len(school) > best[0]):
+            best = (len(school), f)
+    return best[1] if best else None
+
+
+def game_videos() -> dict:
+    """(team, site game id) -> the game's video path, from every game.local.json (ids as site_export.py makes them)."""
+    from coaching_tips import game_label
+
+    out = {}
+    for gf in [DATA_DIR / "game.local.json", *sorted(DATA_DIR.glob("*/game.local.json"))]:
+        if not gf.exists() or gf.parent.name.startswith("_"):
+            continue
+        game = json.loads(gf.read_text())
+        if game.get("video"):
+            out[(game.get("team", DEFAULT_TEAM), game_label(gf.parent, game))] = HERE / game["video"]
+    return out
+
+
+def set_opponents(db, games: dict) -> None:
+    """Fill each published game's missing opponent name and logo from its video (see the module notes)."""
+    sys.path.insert(0, str(HERE / "webapp"))
+    from app import process_logo  # the admin page's re-encoding, so a logo from here is stored the same way
+
+    videos = game_videos()
+    for team, gids in games.items():
+        for gid in gids:
+            video = videos.get((team, gid))
+            opponent = opponent_from_video(str(video)) if video else None
+            if not opponent:
+                print(f"  {team} {gid}: no opponent in the video name")
+                continue
+            key = f"{team}_{gid}"
+            meta = db.get_game(key) or (db.get_game(gid) if team == DEFAULT_TEAM else {})  # legacy key, before teams
+            changed = []
+            if not meta.get("opponent"):
+                meta["opponent"] = opponent[:80]
+                changed.append("opponent")
+            logo = find_logo(video.parent, opponent) if not meta.get("logo") else None
+            if logo:
+                try:
+                    meta["logo"] = process_logo(logo.read_bytes())
+                    changed.append(f"logo {logo.name}")
+                except ValueError as e:
+                    print(f"  {team} {gid}: {logo.name} not used ({e})")
+            if changed:
+                db.put_game(key, meta)
+                db.audit("publish_site", "save_game", {"team": team, "game": gid, "opponent": meta["opponent"],
+                                                        "logo": "logo" in meta})  # fmt: skip
+            print(f"  {team} {gid}: vs {meta['opponent']}" + (f" (set {', '.join(changed)})" if changed else ""))
 
 
 class GcsTarget:
@@ -98,6 +186,8 @@ def main() -> None:
     where.add_argument("--local-dir", type=Path, help="a local folder standing in for the bucket (development)")
     ap.add_argument("--dry-run", action="store_true", help="list what would be uploaded, upload nothing")
     ap.add_argument("--yes", action="store_true", help="do not ask before uploading")
+    ap.add_argument("--project", help='the site Google Cloud project (default: the bucket name without "-data")')
+    ap.add_argument("--db-file", type=Path, help="with --local-dir: the local site's DB_FILE, to set opponents there")
     args = ap.parse_args()
     files = release_files()
     total = sum(f.stat().st_size for _, f in files)
@@ -124,6 +214,22 @@ def main() -> None:
     for old in target.releases()[:-KEEP]:
         target.delete_release(old)
     print(f"published releases/{stamp}; the site picks it up within a minute")
+    sys.path.insert(0, str(HERE / "webapp"))
+    from db import FirestoreDB, MemoryDB
+
+    if args.bucket:
+        project = args.project or (args.bucket[: -len("-data")] if args.bucket.endswith("-data") else None)
+        if not project:
+            print("Opponents not set: give --project.")
+            return
+        db = FirestoreDB(project)
+    elif args.db_file:
+        db = MemoryDB(args.db_file)
+    else:
+        return
+    print("Opponents (only missing ones are set):")
+    set_opponents(db, {t: [g["id"] for g in json.loads((EXPORT / t / "manifest.json").read_text())["games"]]
+                       for t in teams})  # fmt: skip
 
 
 if __name__ == "__main__":
