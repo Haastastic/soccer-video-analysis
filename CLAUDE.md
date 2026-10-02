@@ -742,7 +742,14 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
 5. STOP POINT LIFTED by the owner (2026-09-23): moving into step 7.
 6. DONE for both clips: step 7's identity-assignment pass (roster.csv, tracklet_stitch.py retuned against real labels, jersey_label.py) - see Phase 5/5b findings. clipA 26/95 tracklets identified (11/21 roster players), clipB 16/74 (9/21) - consistent, not clipA-specific. Open, not urgent: the review UI (third piece of step 7), and a fix for the substitution-transition tracklet failure mode (one report so far, not common enough yet to justify the work). Owner's call on what step 7 or step 8 work comes next.
 7. DONE 2026-09-24: tracker swap retune (Phase 6) applied, and identity relabeled on both clips with per-tracklet naming and splitting (Phase 6b): about 80% of target/goalkeeper tracked time identified. Owner's call on what comes next (step 8, stats, is now well supported on identity).
-11. RESUME HERE (saved 2026-09-30): THREE GAMES processed (data/ = game 1 2026-09-18, data/g0922 = game 2,
+12. RESUME HERE (saved 2026-10-02 07:56): two teams (JV, Varsity) on the site; Phases 21-23 done. Running when
+   saved, as detached processes: (a) `new_game.py numbers --game v0916 --apply` (the owner confirmed #16 = a JV
+   player who played up, added to data/v0916/roster.csv only; reader retrained, 9/16 identity/stats/pages redone),
+   (b) after it, JV game 10/1 (data/g1001: setup --kits-like g0916, then run; halves 0:01-0:35 / 0:45-1:22,
+   estimated, owner OK'd). Next: upload 9/16 when (a) ends; finish g1001 (owner maps kits if --kits-like stops;
+   trim halves with the play check; check identity and goal end; upload). Open: a photo for Varsity #16. 9/5
+   Varsity abandoned (only the last 12 min recorded). Details of the session state: the memory resume point.
+11. DONE, kept for history (saved 2026-09-30): THREE GAMES processed (data/ = game 1 2026-09-18, data/g0922 = game 2,
    data/g0916 = game 3), Phases 13 to 20 done, main clean at PR #92. Owner's list after game 3 (per-game jersey
    round, season view, goalkeeper without a keeper kit, event detection) is finished: the jersey round is optional
    (small gain), the learned event model tied the rules and more event labels would not help (Phase 20).
