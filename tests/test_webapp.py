@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "webapp"), str(Path(__file__).resolve().parents[1])]
 
@@ -522,3 +523,10 @@ def test_season_game_list_names_the_opponent(site):
     html = site.client.get(f"{JV}/").get_data(as_text=True)
     assert f'<a href="{JV}/games/{GAMES[1]}">{GAMES[1]}</a> vs Northfield JV' in html
     assert f'<a href="{JV}/games/{GAMES[0]}">{GAMES[0]}</a></td>' in html  # no opponent set: the date alone
+    logo = BytesIO()
+    Image.new("RGB", (40, 40)).save(logo, "PNG")
+    site.post(f"/admin/games/jv/{GAMES[0]}", {"opponent": "Lake Ridge", "logo": (BytesIO(logo.getvalue()), "l.png")},
+              content_type="multipart/form-data")  # fmt: skip
+    html = site.client.get(f"{JV}/").get_data(as_text=True)
+    assert f'vs <img class="crest sm" src="{JV}/logo/game/{GAMES[0]}" alt="">Lake Ridge' in html
+    assert "</a> vs Northfield JV" in html  # no logo: the name alone

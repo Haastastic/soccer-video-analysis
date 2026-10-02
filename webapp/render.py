@@ -44,8 +44,9 @@ def season_page(base: str, rel: Release, shell, visible, photo_ok, games_meta: d
 
     def game_cell(label: str) -> str:
         gid = next((k for k, g in rel.games.items() if g["label"] == label), label)
-        opp = games_meta.get(gid, {}).get("opponent")
-        vs = f" vs {esc(opp)}" if opp else ""
+        meta = games_meta.get(gid, {})
+        logo = f'<img class="crest sm" src="{base}/logo/game/{esc(gid)}" alt="">' if meta.get("logo") else ""
+        vs = f" vs {logo}{esc(meta['opponent'])}" if meta.get("opponent") else ""
         return f'<a href="{base}/games/{esc(gid)}">{esc(label)}</a>{vs}'
 
     web.game_cell = game_cell
