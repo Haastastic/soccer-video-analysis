@@ -506,6 +506,32 @@ def kickoff_end(game: str, g: dict, video: Path | None = None) -> float | None:
     return None
 
 
+END_MIN_PLAYERS = 6  # players seen 5+ min in both games, needed to compare depths
+
+
+def end_check(game: str) -> list:
+    """(other game, correlation) of player depth (behind or ahead of the team line) between this game's coaching
+    metrics and every other processed game of the same team. Depth is measured from the goal we defend, so with the
+    goal end the wrong way round it flips sign for everyone: 2026-10-03, a 6 s kickoff formation gave the wrong end
+    and the correlations were -0.71 to -0.95 (right ends: +0.77 to +0.97)."""
+    team = load_game(game).get("team", DEFAULT_TEAM)
+    mine = pd.read_csv(game_folder(game) / "coaching" / "player_metrics.csv").set_index("jersey")
+    out = []
+    for gf in [DATA_DIR / "game.local.json", *sorted(DATA_DIR.glob("*/game.local.json"))]:
+        folder = gf.parent
+        metrics = folder / "coaching" / "player_metrics.csv"
+        if folder.name == game or folder.name.startswith("_") or not metrics.exists():
+            continue
+        if json.loads(gf.read_text()).get("team", DEFAULT_TEAM) != team:
+            continue
+        other = pd.read_csv(metrics).set_index("jersey")
+        both = [j for j in mine.index.intersection(other.index) if mine.minutes[j] >= 5 and other.minutes[j] >= 5]
+        if len(both) >= END_MIN_PLAYERS:
+            name = folder.name if folder != DATA_DIR else "first game"
+            out.append((name, float(mine.depth[both].corr(other.depth[both]))))
+    return out
+
+
 def name_start(g: dict, name: str) -> str:
     return dict(windows(g))[name]
 
@@ -660,6 +686,15 @@ def cmd_run(args) -> None:
     if g.get("first_half_our_goal_x") is None:
         raise SystemExit("Coaching pages need which goal we defend: add first_half_our_goal_x to game.local.json.")
     run(["coaching_tips.py", "--runs", runs])
+    checks = end_check(args.game)
+    if checks:
+        print("goal end check, player depth vs other games: " + ", ".join(f"{k} {c:+.2f}" for k, c in checks))
+    if checks and np.median([c for _, c in checks]) < 0:
+        raise SystemExit(
+            "The goal end looks the wrong way round (player depths run opposite to the team's other games). Set "
+            '"first_half_our_goal_x" in game.local.json to the other end, rerun jersey_auto.py identify --force on '
+            "every window (the goalkeeper is found by end), then `run` again. Do not publish before that."
+        )
     print(f"\ndone: coaching pages in {game_folder(args.game) / 'coaching'} (local only)")
     print(f"Optional (about 5 min of the owner's time): `new_game.py numbers --game {args.game}`")
 

@@ -750,6 +750,13 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   them. `run` records them itself; `new_game.py breaks [--write]` for games already processed. Found mid-half in
   every game that had them (e.g. 0:28 and 1:17 in a half of 0:06-0:51 and 1:03-1:30), 1 to 4 min each; none in
   two JV games. Stats, coaching pages and the site redone.
+- Varsity 9/22 (data/v0922, the owner's file said 2023, renamed to 2026 on the owner's word): halves from stills
+  (warm-ups and line-up before 0:09, handshake line at 1:48) 0:09-0:54 and 1:02:40-1:48. Kits matched by colour to
+  9/18 (one opponent cluster corrected by Claude). Pilot pitch 67% fixed, 56 s gap after a refit that moved the
+  centre 4 cm; noise floor 28.3 m/min, accepted without owner anchors (window floors 25-43 m/min, the highest of any
+  game). GOAL END WRONG at first: the kickoff probe found only a 6 s formation and said X = 0; player depths then
+  correlated -0.71 to -0.95 with the other Varsity games (right ends +0.73 to +0.97 everywhere). Set to the other
+  end, identity redone. new_game.py run now ends with this check (end_check) and stops when the median is negative.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
