@@ -131,7 +131,7 @@ def propose(scan: pd.DataFrame) -> dict | None:
     water = [b for b in breaks if b != half_break and (h1[0] < b[0] < h1[1] or h2[0] < b[0] < h2[1])]
     return dict(first_half=[hms(h1[0]), hms(h1[1])], second_half=[hms(h2[0]), hms(h2[1])],
                 halftime_min=round((half_break[0] + half_break[1]) / 2 / 60, 1),
-                water_breaks=[[hms(a), hms(b)] for a, b in water])  # fmt: skip
+                proposed_breaks=[[hms(a), hms(b)] for a, b in water])  # fmt: skip
 
 
 def contact_sheet(video: Path, g: dict, dest: Path) -> None:
@@ -144,7 +144,8 @@ def contact_sheet(video: Path, g: dict, dest: Path) -> None:
     marks += [(t, "halftime") for t in np.arange(h1[1] + 60, h2[0], 60)]
     marks += [(h2[0] + k * 60, f"2nd half start {k:+d}min" if k else "2nd half start") for k in range(0, 4)]
     marks += [(h2[1] + k * 60, f"2nd half end {k:+d}min" if k else "2nd half end") for k in range(-3, 4)]
-    marks += [((parse_time(a) + parse_time(b)) / 2, "water break") for a, b in g["water_breaks"]]
+    # the scan's guesses only, shown for the owner; real water breaks (not play) come from the play check in `run`
+    marks += [((parse_time(a) + parse_time(b)) / 2, "break?") for a, b in g.get("proposed_breaks", [])]
     cap = cv2.VideoCapture(str(video))
     tiles = []
     for t, label in marks:
@@ -188,7 +189,7 @@ def cmd_plan(args) -> None:
         run(["scan_density.py", "--video", args.video, "--out", folder])
     proposal = propose(pd.read_csv(folder / "density_scan.csv"))
     if proposal is None:
-        save_game(args.game, dict(video=str(args.video), water_breaks=[], confirmed=False))
+        save_game(args.game, dict(video=str(args.video), proposed_breaks=[], confirmed=False))
         overview_sheet(Path(args.video), folder / "overview_check.jpg")
         print(f"No break near the middle of the video. Check {folder / 'overview_check.jpg'} (a frame every "
               f"{OVERVIEW_STEP_S // 60} min, local only) and pass the halves to `confirm --first-half A-B "
