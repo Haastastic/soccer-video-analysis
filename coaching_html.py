@@ -77,13 +77,22 @@ h3.status { font-size: 15px; margin: 18px 0 8px; }
 #tip { position: fixed; pointer-events: none; background: var(--text-1); color: var(--surface); font-size: 13px;
   padding: 4px 8px; border-radius: 4px; display: none; z-index: 10; max-width: 260px; }
 .hit:hover { stroke: var(--text-1); stroke-width: 0.4; }
-video { width: 100%; max-height: 60vh; background: #000; border-radius: 8px; display: block; margin: 8px 0; }
-.moments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+video { width: 100%; max-height: 45vh; background: #000; border-radius: 8px; display: block; margin: 8px 0;
+  scroll-margin: 12px; }
+.games { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.games button { font: inherit; font-size: 13px; cursor: pointer; color: var(--text-2); background: none;
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+.games button[aria-selected="true"] { color: var(--surface); background: var(--accent); border-color: var(--accent); }
+.mrow { display: grid; grid-template-columns: 9.5em 1fr; gap: 4px 8px; align-items: baseline; margin: 0 0 4px; }
+.mrow .mk { font-size: 13px; color: var(--text-2); }
+.moments { display: flex; flex-wrap: wrap; gap: 4px; }
 .moments button { font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer;
   color: var(--text-1); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
-  padding: 3px 8px; }
+  padding: 2px 7px; }
 .moments button:hover { border-color: var(--accent); }
+.moments button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .moments button small { color: var(--text-3); }
+@media (max-width: 520px) { .mrow { grid-template-columns: 1fr; } }
 """
 
 TOOLTIP_JS = """
@@ -190,11 +199,20 @@ let want = null;  // the latest moment clicked; a video still loading seeks to i
 if (watch) {
   watch.addEventListener('loadedmetadata', () => { if (want !== null) watch.currentTime = want; });
   document.addEventListener('click', e => {
+    const g = e.target.closest('button[data-game]');
+    if (g) {  // the game selector: show that game's moments only
+      document.querySelectorAll('button[data-game]').forEach(x => x.setAttribute('aria-selected', x === g));
+      document.querySelectorAll('.watchgame').forEach(x => { x.hidden = x.dataset.game !== g.dataset.game; });
+      return;
+    }
     const b = e.target.closest('button[data-t]'); if (!b) return;
+    document.querySelectorAll('button[data-t]').forEach(x => x.setAttribute('aria-pressed', x === b));
     want = +b.dataset.t;
     if (watch.getAttribute('src') !== b.dataset.src) watch.src = b.dataset.src;
     else if (watch.readyState >= 1) watch.currentTime = want;
     watch.play();
+    const r = watch.getBoundingClientRect();  // the player scrolled away: bring it back
+    if (r.top < 0 || r.bottom > innerHeight) watch.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
 }
 </script>
@@ -212,7 +230,8 @@ def watch_section(games: dict, site: bool = False) -> str:
     seconds, caption, clip href) on the site, a short clip of that moment (site_clips.py) played from its start. The
     site's document adds the script itself (with its CSP nonce). Empty when there is nothing to show."""
     blocks = []
-    for label, (href, groups) in games.items():
+    for label in sorted(games, reverse=True):  # labels are dates: newest game first
+        href, groups = games[label]
         rows = []
         for title, items in groups:
             buttons = []
@@ -223,11 +242,29 @@ def watch_section(games: dict, site: bool = False) -> str:
                     f'<button data-src="{esc(src)}" data-t="{seek:.1f}">{clock(t)} <small>{esc(cap)}</small></button>'
                 )
             if buttons:
-                rows.append(f'<h3>{esc(title)}</h3><p class="moments">{"".join(buttons)}</p>')
+                rows.append(
+                    f'<div class="mrow"><span class="mk">{esc(title)}</span>'
+                    f'<span class="moments">{"".join(buttons)}</span></div>'
+                )
         if rows:
-            blocks.append((f'<h3 class="status">{esc(label)}</h3>' if len(games) > 1 else "") + "".join(rows))
+            blocks.append((label, "".join(rows)))
     if not blocks:
         return ""
+    # several games: a selector, one game's moments at a time (the newest first), so the player stays in view
+    tabs = (
+        '<div class="games" role="tablist" aria-label="Game">'
+        + "".join(
+            f'<button role="tab" data-game="{esc(k)}" aria-selected="{str(i == 0).lower()}">{esc(k)}</button>'
+            for i, (k, _) in enumerate(blocks)
+        )
+        + "</div>"
+        if len(blocks) > 1
+        else ""
+    )
+    body = "".join(
+        f'<div class="watchgame" data-game="{esc(k)}"{" hidden" if i else ""}>{rows}</div>'
+        for i, (k, rows) in enumerate(blocks)
+    )
     intro = (
         "Short clips of the player's moments, the player marked with a white triangle. Times are the game video's."
         if site
@@ -236,7 +273,7 @@ def watch_section(games: dict, site: bool = False) -> str:
     )
     return (
         f'<h2>Watch on video</h2><p class="sub">{intro}</p>'
-        f'<video id="watch" controls playsinline preload="none"></video>{"".join(blocks)}' + ("" if site else WATCH_JS)
+        f'<video id="watch" controls playsinline preload="none"></video>{tabs}{body}' + ("" if site else WATCH_JS)
     )
 
 
