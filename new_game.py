@@ -61,7 +61,7 @@ import numpy as np
 import pandas as pd
 
 from run_windows import stages
-from sv_common import DATA_DIR, DEFAULT_TEAM, parse_time, read_roster, require_under_data, team_of
+from sv_common import DATA_DIR, DEFAULT_TEAM, game_dir, parse_time, read_roster, require_under_data, team_of
 
 HERE = Path(__file__).resolve().parent
 WINDOW_S = 300
@@ -512,11 +512,11 @@ def name_start(g: dict, name: str) -> str:
 MIN_OURS = 3  # a minute with fewer of our players visible per frame (median) is not our match
 
 
-def ours_per_minute(game: str, names: list) -> pd.Series:
+def ours_per_minute(run_dirs: list) -> pd.Series:
     """Median number of our players (target-role player candidates) per frame, per minute of the video."""
     out = {}
-    for name, start in names:
-        run_dir = game_folder(game) / name
+    for run_dir in run_dirs:
+        start = json.loads((run_dir / "cache" / "meta.json").read_text())["clip_start"]
         tr = pd.read_csv(run_dir / "best_tracklets.csv.gz", usecols=["ci", "track_id"])
         roles = pd.read_csv(run_dir / "tracklet_roles.csv").set_index("track_id")
         ours = roles.index[(roles.role == "target") & roles.player_candidate.astype(bool)]
@@ -528,18 +528,68 @@ def ours_per_minute(game: str, names: list) -> pd.Series:
     return pd.Series(out).sort_index()
 
 
+def find_breaks(per: pd.Series, g: dict) -> list:
+    """Water breaks: runs of minutes with fewer than MIN_OURS of our players per frame that have a covered minute of
+    play right before and right after, inside the same half (when the game has halves). A thin run at the start or
+    end of a half is not a break: it means the half's time is off (check_play says so)."""
+    halves = [tuple(parse_time(x) for x in g[k]) for k in ("first_half", "second_half") if g.get(k)]
+    thin = per < MIN_OURS
+    out, m, prev = [], None, None
+    for minute in per.index:
+        if m is not None and minute != prev + 1:  # a gap between windows: the end of this run is not seen
+            m = None
+        prev = minute
+        if thin[minute] and m is None:
+            m = minute
+        if m is not None and not thin[minute]:
+            a, b = m * 60, minute * 60  # the break's minutes: from m up to (not including) this one
+            before = m - 1 in per.index and not thin[m - 1]
+            inside = not halves or any(lo <= (m - 1) * 60 and (minute + 1) * 60 <= hi for lo, hi in halves)
+            if before and inside:
+                out.append([hms(a), hms(b)])
+            m = None
+    return out
+
+
 def check_play(game: str, g: dict, names: list) -> None:
-    """Warn about minutes inside the confirmed halves where our team is not on the pitch. Game 2 (2026-09-28): the
-    contact sheet's thumbnails made halftime warm-ups and the next game's players look like play, and the halves
-    were confirmed 6 min too long at each end; counting our players per minute showed the real ends at once."""
-    per = ours_per_minute(game, names)
-    thin = per[per < MIN_OURS]
+    """Warn about minutes inside the confirmed halves where our team is not on the pitch, and record those inside a
+    half as water breaks (not play: sv_common.play_mask). Game 2 (2026-09-28): the contact sheet's thumbnails made
+    halftime warm-ups and the next game's players look like play, and the halves were confirmed 6 min too long at
+    each end; counting our players per minute showed the real ends at once."""
+    per = ours_per_minute([game_folder(game) / n for n, _ in names])
+    breaks = find_breaks(per, g)
+    if breaks != g.get("water_breaks"):
+        g["water_breaks"] = breaks
+        save_game(game, g)
+    if breaks:
+        print("play check: water breaks (not counted as play): " + ", ".join(f"{a}-{b}" for a, b in breaks))
+    in_break = [m for m in per.index if any(parse_time(a) <= m * 60 < parse_time(b) for a, b in breaks)]
+    thin = per[(per < MIN_OURS) & ~per.index.isin(in_break)]
     if not len(thin):
-        print("play check: our team is on the pitch in every minute of the confirmed halves")
+        print("play check: our team is on the pitch in every other minute of the confirmed halves")
         return
     print(f"play check: WARNING, fewer than {MIN_OURS} of our players per frame in minute(s) "
           + ", ".join(f"{m // 60}:{m % 60:02d}" for m in thin.index))  # fmt: skip
     print("  if that is the start or end of a half, correct it with `confirm --first-half/--second-half` and rerun")
+
+
+def cmd_breaks(args) -> None:
+    """Water breaks for games already processed (`run` finds them itself now): every game, or --game. Dry run
+    unless --write; then rerun player_stats.py and coaching_tips.py for the games whose breaks changed."""
+    by_game = {}
+    for w in all_windows():
+        by_game.setdefault(game_dir(w), []).append(w)
+    for folder, runs in by_game.items():
+        if args.game and folder.name != args.game:
+            continue
+        path = folder / "game.local.json"
+        g = json.loads(path.read_text()) if path.exists() else {}
+        breaks = find_breaks(ours_per_minute(runs), g)
+        same = breaks == (g.get("water_breaks") or [])
+        print(f"{folder.name}: {', '.join(f'{a}-{b}' for a, b in breaks) or 'none'}{'' if same else ' (changed)'}")
+        if args.write and not same:
+            g["water_breaks"] = breaks
+            path.write_text(json.dumps(g, indent=2))
 
 
 def cmd_run(args) -> None:
@@ -716,6 +766,10 @@ def main() -> None:
         "against its kits instead of stopping for the owner (check the montage afterwards)",
     )
     s.set_defaults(fn=cmd_setup)
+    b = sub.add_parser("breaks", help="water breaks of games already processed (minutes our team leaves the pitch)")
+    b.add_argument("--game", default="", help="one game folder (default: every game)")
+    b.add_argument("--write", action="store_true", help="save them in each game.local.json")
+    b.set_defaults(fn=cmd_breaks)
     r = sub.add_parser("run", help="every window, which goal we defend, stats and coaching pages")
     r.add_argument("--game", required=True)
     r.add_argument("--workers", type=int, default=3, help="windows processed at once (GPU memory: about 2 GB each)")

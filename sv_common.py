@@ -93,20 +93,25 @@ def read_roster(team: str = DEFAULT_TEAM, run: Path | None = None) -> pd.DataFra
 
 
 def play_mask(run: Path, ci) -> np.ndarray:
-    """True where a cached frame lies inside one of the game's halves (game.local.json, video time). The halves are
-    the owner's: a window may run a little past them (5-minute windows), and that time is not play. All True when
-    the game file has no halves (the first game's hand-picked windows)."""
+    """True where a cached frame lies inside one of the game's halves (game.local.json, video time) and outside its
+    water breaks. The halves are the owner's: a window may run a little past them (5-minute windows), and that time is
+    not play. Water breaks ("water_breaks", [[start, end], ...], found by new_game.py breaks: minutes inside a half
+    where our team leaves the pitch) are not play either (owner, 2026-10-02). Without halves (the first game's
+    hand-picked windows) only the breaks are taken out."""
     ci = np.asarray(ci, dtype=float)
     path = game_file(run, "game.local.json")
     g = json.loads(path.read_text()) if path.exists() else {}
-    if not g.get("first_half") or not g.get("second_half"):
+    halves = bool(g.get("first_half") and g.get("second_half"))
+    if not halves and not g.get("water_breaks"):
         return np.ones(len(ci), bool)
     meta = json.loads((Path(run) / "cache" / "meta.json").read_text())
     t = parse_time(meta["clip_start"]) + ci / float(meta["cache_fps"])
-    out = np.zeros(len(ci), bool)
-    for key in ("first_half", "second_half"):
+    out = np.zeros(len(ci), bool) if halves else np.ones(len(ci), bool)
+    for key in ("first_half", "second_half") if halves else ():
         a, b = (parse_time(x) for x in g[key])
         out |= (t >= a) & (t <= b)
+    for a, b in g.get("water_breaks") or []:
+        out &= ~((t >= parse_time(a)) & (t < parse_time(b)))
     return out
 
 
