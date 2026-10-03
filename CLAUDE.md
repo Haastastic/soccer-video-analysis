@@ -743,6 +743,13 @@ Windows, RTX 3060 Laptop GPU, VS Code, Python.
   writes clips.json per game; publish_site.py uploads them outside the releases (clips/<team>/<game>/, only new
   ones, deletes unnamed ones); the site serves /t/<team>/clip/<game>/<NN>_<ms>.mp4 only to viewers allowed to see
   #NN and only names its release lists (Range requests answered for iPhone Safari). Privacy page updated.
+- Water breaks are not play (owner, 2026-10-02). new_game.py finds them from the play check: a run of minutes with
+  fewer than 3 of our players per frame, with a covered minute of play right before and after inside the same half
+  (thin minutes at a half's edge still mean the half's time is off). Saved as "water_breaks" in game.local.json;
+  sv_common.play_mask drops them (also for the first game, which has no halves), so stats, coaching and clips skip
+  them. `run` records them itself; `new_game.py breaks [--write]` for games already processed. Found mid-half in
+  every game that had them (e.g. 0:28 and 1:17 in a half of 0:06-0:51 and 1:03-1:30), 1 to 4 min each; none in
+  two JV games. Stats, coaching pages and the site redone.
 
 ## Pipeline status
 1. Ingest and detection cache: detect_cache.py (done, validated on two full clips)
